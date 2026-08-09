@@ -13,18 +13,18 @@ describe("application release metadata", () => {
       packages?: Record<string, { version?: string }>;
     };
 
-    expect(APP_RELEASE.version).toBe("1.0.0-beta.2");
+    expect(APP_RELEASE.version).toBe("1.0.0-beta.3");
     expect(APP_RELEASE.version).toBe(packageManifest.version);
     expect(lockfile.version).toBe(packageManifest.version);
     expect(lockfile.packages?.[""]?.version).toBe(packageManifest.version);
   });
 
-  it("presents the current prerelease as Beta 2", () => {
+  it("presents the current prerelease as Beta 3", () => {
     expect(APP_RELEASE).toMatchObject({
       channel: "beta",
-      channelLabel: "Beta 2",
-      displayLabel: "Beta 2 · v1.0.0-beta.2",
-      displayVersion: "v1.0.0-beta.2",
+      channelLabel: "Beta 3",
+      displayLabel: "Beta 3 · v1.0.0-beta.3",
+      displayVersion: "v1.0.0-beta.3",
       isPrerelease: true,
     });
   });

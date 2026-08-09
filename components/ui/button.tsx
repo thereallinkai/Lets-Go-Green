@@ -11,11 +11,11 @@ const buttonVariants = cva(
         default:
           "ui-button-default bg-[#123524] text-white shadow-[0_7px_20px_rgba(18,53,36,0.16)] hover:bg-[#194a32] hover:shadow-[0_10px_26px_rgba(18,53,36,0.2)]",
         accent:
-          "bg-[#b8e36d] text-[#123524] shadow-[0_7px_20px_rgba(31,107,67,0.12)] hover:bg-[#c8ee82] hover:shadow-[0_10px_26px_rgba(31,107,67,0.17)]",
+          "ui-button-accent bg-[#b8e36d] text-[#123524] shadow-[0_7px_20px_rgba(31,107,67,0.12)] hover:bg-[#c8ee82] hover:shadow-[0_10px_26px_rgba(31,107,67,0.17)]",
         outline:
-          "border-[#bfd4c2] bg-white/25 text-[#123524] hover:border-[#8bb897] hover:bg-white/70",
+          "ui-button-outline border-[#bfd4c2] bg-white/25 text-[#123524] hover:border-[#8bb897] hover:bg-white/70",
         danger:
-          "border-[#9b3d35]/35 bg-[#fff8f7] text-[#9b3d35] hover:border-[#9b3d35]/55 hover:bg-[#fff2f0]",
+          "ui-button-danger border-[#9b3d35]/35 bg-[#fff8f7] text-[#9b3d35] hover:border-[#9b3d35]/55 hover:bg-[#fff2f0]",
       },
       size: {
         default: "min-h-12",

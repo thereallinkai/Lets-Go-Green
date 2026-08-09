@@ -12,6 +12,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { AppReleaseCard } from "@/components/app-release-card";
+import { AppearanceControl } from "@/components/appearance-control";
 import { FoodLabelUpload } from "@/components/food-label-upload";
 
 export type SettingsGoalType =
@@ -96,6 +97,7 @@ type SaveResult = {
 };
 
 const sections = [
+  ["appearance", "Appearance"],
   ["profile", "Profile"],
   ["preferences", "Preferences"],
   ["foods", "Label foods"],
@@ -429,6 +431,16 @@ export function SettingsView({
         </nav>
 
         <div className="settings-content">
+          <section className="card settings-section" id="appearance">
+            <div className="card-title">
+              <div>
+                <h2>Appearance</h2>
+                <p>Choose how Let&apos;s Go Green! looks on this device.</p>
+              </div>
+            </div>
+            <AppearanceControl variant="full" />
+          </section>
+
           <section className="card settings-section" id="profile">
             <div className="card-title">
               <div>
@@ -722,8 +734,9 @@ export function SettingsView({
                 <h2>Private label foods</h2>
                 <p>
                   Photograph and transcribe the exact branded product instead of
-                  guessing. Your confirmed private copy can be used in your plan;
-                  any shared barcode copy stays pending until catalog review.
+                  guessing. Your confirmed private copy can be used in your plan.
+                  If you explicitly share normalized facts, that separate copy
+                  stays pending until catalog review.
                 </p>
               </div>
             </div>

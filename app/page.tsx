@@ -14,7 +14,7 @@ const benefits = [
   {
     icon: Sparkles,
     title: "Exact food and product guidance",
-    body: "Choose generic foods or exact brands, flavors, and barcodes with visible nutrition sources and verification status.",
+    body: "Choose generic foods or exact brands and flavors, with visible nutrition sources and verification status.",
   },
   {
     icon: CalendarCheck2,

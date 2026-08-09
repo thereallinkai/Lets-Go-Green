@@ -4,6 +4,8 @@ import sharp from "sharp";
 const MAX_BYTES = 8 * 1024 * 1024;
 const MAX_PIXELS = 20_000_000;
 const MAX_DIMENSION = 20_000;
+const MIN_DIMENSION = 480;
+const MIN_LUMINANCE_RANGE = 24;
 const PNG_SIGNATURE = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
 ]);
@@ -60,12 +62,22 @@ export async function sanitizeFoodLabelImage(
   if (
     !info.width ||
     !info.height ||
+    Math.min(info.width, info.height) < MIN_DIMENSION ||
     info.width > MAX_DIMENSION ||
     info.height > MAX_DIMENSION ||
     info.width * info.height > MAX_PIXELS ||
     data.length > MAX_BYTES
   ) {
     throw new Error("image_dimensions_not_supported");
+  }
+
+  const statistics = await sharp(data).greyscale().stats();
+  const luminance = statistics.channels[0];
+  if (
+    !luminance ||
+    luminance.max - luminance.min < MIN_LUMINANCE_RANGE
+  ) {
+    throw new Error("image_contrast_too_low");
   }
 
   return {

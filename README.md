@@ -8,8 +8,8 @@ The repository is a single full-stack TypeScript application built with Next.js 
 
 > **Wellness and safety:** Let's Go Green! provides general wellness information and is not medical advice. Individual needs can vary. Consult a qualified healthcare professional or registered dietitian when appropriate.
 
-The current testing build is **Let's Go Green! 1.0 Beta 2**
-(`1.0.0-beta.2`). See [VERSIONING.md](VERSIONING.md) for the release-number
+The current testing build is **Let's Go Green! 1.0 Beta 3**
+(`1.0.0-beta.3`). See [VERSIONING.md](VERSIONING.md) for the release-number
 policy and [CHANGELOG.md](CHANGELOG.md) for user-visible changes.
 
 ## Current feature set
@@ -23,16 +23,28 @@ The repository is structured to provide:
   calculations.
 - Authenticated Today, My Plan, Calendar, Progress, Profile, and Settings experiences on desktop and mobile.
 - Resumable onboarding for profile, food preferences, goals, lifestyle, safety context, and review.
-- A searchable food catalog that distinguishes generic foods from exact brand, product, variant, and GTIN/barcode records.
+- Required height selection from metric or imperial lists, with height included
+  in the deterministic energy estimate and plan context.
+- A searchable food catalog that distinguishes generic foods from exact brand,
+  product, and flavor or variant records.
 - Expandable nutrition facts with energy, macronutrients, available micronutrients, measurement basis, source attribution, and verification status.
-- Authenticated, explicit online name search across USDA FoodData Central and Open Food Facts, plus exact Open Food Facts barcode lookup, with server-side normalization and a pending-review boundary.
-- Private, sanitized nutrition-label photo upload and exact transcription for a user-confirmed personal product; a GTIN can also create one reusable normalized catalog record without sharing the photo evidence.
+- One authenticated, explicitly submitted food-name search that ranks saved
+  foods with USDA FoodData Central and Open Food Facts candidates, product
+  photos when supplied, server-side normalization, and a pending-review boundary.
+- Private, sanitized nutrition-label photo upload and exact manual confirmation
+  for a user-confirmed personal product; a separate opt-in can create one
+  reusable normalized pending-review record without sharing the photo or
+  account identity.
 - Versioned seven-day plans with an accepted-plan boundary.
 - Six ordered daily spaces—breakfast, morning snack, lunch, afternoon snack, dinner, and evening snack—with extra-food recording and an explicit skipped state whose reason is optional.
 - A profile reached from the account avatar, automatic device-time-zone initialization without a location permission prompt, a replayable first-run tutorial, and clearly external nearby-shopping links.
 - A green responsive visual system with coordinated page, section, surface,
   stack, dialog, and interaction feedback that respects reduced-motion
   preferences.
+- System, Light, and Dark appearance modes; System follows live device/macOS
+  appearance, while an explicit override is stored locally.
+- Safe structured registration and onboarding errors with a concrete reason,
+  stable reference code, recovery action, and retry guidance.
 - Local-date weight entries, progress summaries, and rolling trends.
 - Deterministic unit, date, progress, completion, nutrition, filtering, and safety calculations.
 - Local Supabase Auth, PostgreSQL, Row Level Security, migrations, deterministic seed data, Studio, and captured email.
@@ -68,7 +80,7 @@ flowchart LR
   N -->|Default local and CI mode| M
   N -. Explicit server-only opt-in .-> O
   N -->|Server-side text lookup| U
-  N -->|Explicit name or barcode lookup| X
+  N -->|Explicit submitted name lookup| X
   B -. Clearly labeled external search .-> G
 ```
 
@@ -82,9 +94,9 @@ Deterministic code—not a language model—owns unit conversion, timeline math,
 | --- | --- | --- |
 | Reviewed local catalog | Generic foods or exact products, measurement basis, nutrition, safety metadata, and provenance | Eligible only when the required nutrition and safety records have the reviewed statuses enforced by the database |
 | USDA FoodData Central | Text-search candidates and a server-refetched normalized record | Labeled source-reported and `pending_review`; searchable and loggable, but not eligible for generated plans until reviewed |
-| Open Food Facts | Explicit brand/product/flavor name-search candidates or an exact 8–14 digit barcode, followed by a server-refetched normalized product | Community-source data with attribution, labeled source-reported and `pending_review`; not eligible for generated plans until reviewed |
+| Open Food Facts | Explicit brand/product/flavor name-search candidates and provider photos when available, followed by a server-refetched normalized product | Community-source data with attribution, labeled source-reported and `pending_review`; not eligible for generated plans until reviewed |
 | Uploaded package label | A server-re-encoded, owner-private JPEG/PNG plus the account owner's exact transcription | The original upload is not retained as-is; confirmation requires sanitized nutrition-label evidence and creates an active `user_label` personal product for that owner, not an independently reviewed record |
-| Label with a GTIN | A normalized shared catalog record keyed by the barcode | Reusable in catalog search and daily logging as `pending_review`; the private photo evidence and owner-private personal product are never published to other accounts |
+| Opt-in reusable label facts | One normalized catalog identity derived from exact product text and confirmed core nutrition | Created only after a separate sharing confirmation; reusable as `pending_review`, while the private photo, account identity, and owner-private product are never published to other accounts |
 
 Nutrition cards preserve the stated basis—such as raw, dry, cooked, as sold, per 100 g, or one label serving—and show only values actually present in the stored source. Calories, energy in kilojoules, protein, carbohydrate, fat, fiber, sodium, saturated and trans fat, sugars, cholesterol, potassium, calcium, iron, vitamin D, and additional provider-reported nutrients can be displayed when available. A missing nutrient remains missing; it is never filled by a guess.
 
@@ -201,14 +213,14 @@ Exact-product lookup runs on the server. Add these values to the ignored `.env.l
 USDA_FDC_API_KEY=
 
 # Descriptive application identity sent to food-data providers.
-FOOD_LOOKUP_USER_AGENT=LetsGoGreen/1.0.0-beta.2 (https://github.com/thereallinkai/Lets-Go-Green)
+FOOD_LOOKUP_USER_AGENT=LetsGoGreen/1.0.0-beta.3 (https://github.com/thereallinkai/Lets-Go-Green)
 ```
 
 - `USDA_FDC_API_KEY` is optional for local development because non-production mode can use the USDA `DEMO_KEY`. That shared key is rate-limited and is not a production configuration. Obtain and secure a data.gov key before relying on USDA lookup in a deployed environment.
 - `FOOD_LOOKUP_USER_AGENT` is not a secret, but it must be a descriptive value of at least eight characters. The committed default identifies this repository.
-- Open Food Facts name and barcode lookup do not require a key. Both providers require outbound network access and can be unavailable, incomplete, or rate-limited.
+- Open Food Facts name lookup does not require a key. Both providers require outbound network access and can be unavailable, incomplete, or rate-limited.
 - Online name lookup is user-triggered, not search-as-you-type. The server limits fields and result count because [Open Food Facts limits search requests and warns against search-as-you-type](https://openfoodfacts.github.io/documentation/docs/Product-Opener/api/).
-- Search results are candidates only. Import refetches the selected USDA record or exact Open Food Facts barcode record on the server, stores provenance and a source snapshot, and marks the normalized record `pending_review`.
+- Search results are candidates only. Import refetches the selected USDA or Open Food Facts record on the server, stores provenance and a source snapshot, and marks the normalized record `pending_review`.
 
 Provider configuration expands the catalog; it does not turn source-reported data into reviewed nutrition or make a pending record eligible for generated plans.
 
@@ -277,13 +289,17 @@ The endpoint does not expose keys, connection strings, internal tokens, raw prov
 Migrations under `supabase/migrations/` are the source of truth. Do not edit a migration that may already have been applied.
 
 The product, package, documentation, container labels, environment variables,
-browser-storage keys, exports, and current runtime identifiers use **Let's Go
-Green!**. Two hidden legacy identifiers intentionally remain compatible:
-the original migration filename/history and Supabase `project_id`. Renaming
-either would make an existing local database look unapplied or detach its
-preserved Docker volumes. Old browser-storage and Auth-redirect keys are read
-only long enough to migrate existing local drafts/configuration to the new
-names.
+current browser-storage keys, exports, and runtime identifiers use **Let's Go
+Green!**. Two persistent hidden legacy identifiers intentionally remain
+compatible: the original migration filename/history and Supabase `project_id`.
+Renaming either would make an existing local database look unapplied or detach
+its preserved Docker volumes. Non-sensitive legacy configuration and
+Auth-redirect keys are read only long enough to migrate them. The legacy
+`cutting-plan-registration-draft` key is read once for safe non-password fields,
+migrated to the current same-tab registration draft when valid, and then
+removed. Older globally keyed onboarding drafts are removed without restoration
+because they cannot be safely attributed to one account on a shared browser;
+Beta 3 stores new onboarding drafts under an authenticated account scope.
 
 For a schema change:
 
@@ -429,7 +445,10 @@ Never commit API keys, access tokens, database passwords, production credential 
 - Clean Codespaces and Dev Container acceptance, email/OTP, cookies, password reset, onboarding, external lookup, and label upload must be verified in the target environment with the documented checklist; repository code alone is not production acceptance.
 - USDA development lookup can use the shared `DEMO_KEY`, which has restrictive rate limits. A deployed environment needs its own secured `USDA_FDC_API_KEY`.
 - USDA and Open Food Facts values are source-reported, can be incomplete, and enter the shared catalog as `pending_review`. No external import is automatically approved for generated plans.
-- A confirmed personal label product is eligible only for its owner and remains labeled `user_label`. A barcode-derived shared record remains pending review; its re-encoded photo evidence remains private.
+- A confirmed personal label product is eligible only for its owner and remains
+  labeled `user_label`. If the user separately opts in, its exact normalized
+  shared identity remains pending review; the re-encoded photo evidence and
+  account identity remain private.
 - Nearby Google Maps links do not verify inventory, price, availability, distance, or product suitability. Google Search and ChatGPT are not nutrition truth.
 - Account export is implemented, but account deletion remains visibly unavailable until a reviewed deletion and retention procedure is implemented.
 - Plan meals show conservative per-meal nutrition where supported; the UI does not yet claim an authoritative summed daily plan total.
@@ -533,9 +552,11 @@ Back up anything needed, then run `npm run db:reset` and enter the exact confirm
 - Use neutral, nonjudgmental language. A missed meal or check-in is simply `Not marked`.
 - Clearly distinguish `Provided by you`, `Calculated by the app`, `Suggested by AI`, and `Pending verification`.
 - Preserve raw, dry, cooked, as-sold, and label-serving measurement bases.
-- Identify branded foods by exact brand, product, variant, and GTIN when available; never invent nutrition for an unspecified branded or variable product.
+- Identify branded foods by exact brand, product, flavor or variant, and provider identity when available; never invent nutrition for an unspecified branded or variable product.
 - Display source attribution and review status beside source-reported nutrition. Provider availability is not evidence quality.
-- Re-encode uploaded label photos, keep the sanitized evidence owner-private, and share only a normalized pending catalog record when a stable GTIN supports reuse.
+- Re-encode uploaded label photos, keep the sanitized evidence owner-private,
+  require exact user confirmation, and share a normalized pending catalog
+  record only after the user separately opts in.
 - Use device time-zone settings without treating a time zone as precise location. Label external shopping links and make no inventory claim.
 - Treat safety questions as optional unless functionally required and explain why they are requested.
 - Do not generate aggressive restriction advice for a minor, pregnancy or nursing, an eating-disorder history, relevant medical concerns, or reported symptoms such as dizziness, fainting, heart palpitations, or severe weakness.

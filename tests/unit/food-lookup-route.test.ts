@@ -79,6 +79,7 @@ vi.mock("@/src/lib/supabase/admin", () => ({
 }));
 
 import { POST } from "../../app/api/foods/lookup/route";
+import { ExternalFoodError } from "../../src/lib/external/food-data-types";
 
 const offCandidate = {
   provider: "open_food_facts" as const,
@@ -90,6 +91,8 @@ const offCandidate = {
   variantName: null,
   gtin: "748927022650",
   dataType: "Open Food Facts product",
+  imageUrl: null,
+  nutritionImageUrl: null,
   nutritionPreview: {
     calories: 375,
     proteinGrams: 75,
@@ -175,6 +178,75 @@ describe("external food lookup route", () => {
     });
   });
 
+  it("fans one smart search out to both providers and keeps partial results", async () => {
+    const usdaCandidate = {
+      ...offCandidate,
+      provider: "usda_fdc" as const,
+      externalId: "168390",
+      displayName: "Asparagus, raw",
+      productName: "Asparagus, raw",
+      brandName: null,
+      gtin: null,
+      dataType: "Foundation",
+    };
+    routeState.searchUsdaFoods.mockResolvedValue([usdaCandidate]);
+    routeState.searchOpenFoodFactsProducts.mockRejectedValue(
+      new Error("provider timeout"),
+    );
+
+    const response = await POST(
+      new Request("http://localhost/api/foods/lookup", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "search", query: "asparagus" }),
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.data).toMatchObject({
+      kind: "candidates",
+      candidates: [usdaCandidate],
+      providers: expect.arrayContaining([
+        expect.objectContaining({
+          provider: "usda_fdc",
+          status: "ok",
+          resultCount: 1,
+        }),
+        expect.objectContaining({
+          provider: "open_food_facts",
+          status: "unavailable",
+          resultCount: 0,
+        }),
+      ]),
+    });
+    expect(
+      body.data.providers.find(
+        (provider: { provider: string }) =>
+          provider.provider === "open_food_facts",
+      ).message,
+    ).toMatch(/^Open Food Facts /);
+    expect(JSON.stringify(body)).not.toContain("provider timeout");
+    expect(routeState.searchUsdaFoods).toHaveBeenCalledWith(
+      "asparagus",
+      expect.objectContaining({ apiKey: "fixture-key" }),
+    );
+    expect(routeState.searchOpenFoodFactsProducts).toHaveBeenCalledWith(
+      "asparagus",
+      expect.objectContaining({
+        userAgent: "LetsGoGreen tests@example.invalid",
+      }),
+    );
+    expect(routeState.rpc).toHaveBeenCalledWith(
+      "record_external_food_lookup",
+      expect.objectContaining({ lookup_provider: "usda_fdc" }),
+    );
+    expect(routeState.rpc).toHaveBeenCalledWith(
+      "record_external_food_lookup",
+      expect.objectContaining({ lookup_provider: "open_food_facts" }),
+    );
+  });
+
   it("runs branded-product name search only after an explicit API request", async () => {
     routeState.searchOpenFoodFactsProducts.mockResolvedValue([offCandidate]);
 
@@ -225,7 +297,41 @@ describe("external food lookup route", () => {
 
     expect(response.status).toBe(429);
     expect(body.error.code).toBe("FOOD_LOOKUP_RATE_LIMITED");
+    expect(body.error.action).toEqual({
+      kind: "wait",
+      label: "Wait, then try again",
+    });
     expect(routeState.searchOpenFoodFactsProducts).not.toHaveBeenCalled();
+  });
+
+  it("returns a stable safe reason when a source record lacks required nutrition", async () => {
+    routeState.loadOpenFoodFactsProduct.mockRejectedValue(
+      new ExternalFoodError(
+        "incomplete_nutrition",
+        "unsafe provider diagnostic with internal_table_name",
+      ),
+    );
+
+    const response = await POST(
+      new Request("http://localhost/api/foods/lookup", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "import",
+          provider: "open_food_facts",
+          externalId: "748927022650",
+        }),
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(422);
+    expect(body.error).toMatchObject({
+      code: "FOOD_SOURCE_NUTRITION_INCOMPLETE",
+      retryable: false,
+      action: { kind: "edit" },
+    });
+    expect(JSON.stringify(body)).not.toContain("internal_table_name");
   });
 
   it("refetches an exact Open Food Facts record before caching an import", async () => {

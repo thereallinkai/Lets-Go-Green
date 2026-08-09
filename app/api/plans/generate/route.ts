@@ -13,7 +13,7 @@ import {
   type MeasurementBasis,
   type NutritionRecord,
 } from "@/src/lib/domain";
-import { apiError, apiSuccess } from "@/src/lib/api-response";
+import { apiError, apiSuccess, publicError } from "@/src/lib/api-response";
 import { getAIProviderMode, isDevelopmentDemo } from "@/src/lib/env";
 import { createSupabaseAdminClient } from "@/src/lib/supabase/admin";
 import { createSupabaseServerClient } from "@/src/lib/supabase/server";
@@ -24,6 +24,10 @@ import {
 } from "@/src/lib/ai/provider";
 import { PLAN_PROMPT_VERSION } from "@/src/lib/ai/prompt";
 import { decidePlanGenerationReplay } from "@/src/lib/domain/idempotency";
+import {
+  classifyPlanGenerationFailure,
+  type PlanGenerationFailureCode,
+} from "@/src/lib/plan-generation-error-taxonomy";
 
 export const runtime = "nodejs";
 
@@ -221,13 +225,25 @@ export async function POST(request: Request) {
     const weights = weightsResult.data ?? [];
     if (
       profileResult.error ||
+      goalResult.error ||
+      weightsResult.error ||
+      preferencesResult.error ||
+      warningsResult.error
+    ) {
+      throw new Error("profile_data_load_failed");
+    }
+    if (
       !profile ||
       profile.onboarding_status !== "completed" ||
-      goalResult.error ||
       !goal ||
       weights.length === 0
     ) {
       throw new Error("trusted_profile_incomplete");
+    }
+    // New onboarding requires height. Older completed profiles can still have
+    // NULL here, so fail with a repair path before doing any calculations.
+    if (profile.height_cm === null) {
+      throw new Error("profile_height_required");
     }
 
     const foodIds = [...new Set((preferencesResult.data ?? []).map((item) => item.food_id))];
@@ -485,6 +501,8 @@ export async function POST(request: Request) {
       error instanceof Error &&
       [
         "trusted_profile_incomplete",
+        "profile_height_required",
+        "profile_data_load_failed",
         "insufficient_eligible_foods",
         "provider_output_rejected",
         "plan_persistence_failed",
@@ -501,10 +519,8 @@ export async function POST(request: Request) {
       })
       .eq("id", generationRequest.id)
       .eq("user_id", user.id);
-    return apiError(
-      code,
-      "A new plan could not be generated. Your accepted plan is unchanged; review the inputs and try again.",
-      code === "INSUFFICIENT_ELIGIBLE_FOODS" ? 422 : 500,
+    return publicError(
+      classifyPlanGenerationFailure(code as PlanGenerationFailureCode),
     );
   }
 }

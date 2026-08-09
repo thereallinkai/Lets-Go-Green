@@ -1,7 +1,7 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   FoodSearchPicker,
   type FoodPickerItem,
@@ -20,7 +20,7 @@ const localFood: FoodPickerItem = {
   source: null,
 };
 
-const candidate = {
+const offCandidate = {
   provider: "open_food_facts" as const,
   externalId: "748927022650",
   displayName:
@@ -30,11 +30,33 @@ const candidate = {
   variantName: null,
   gtin: "748927022650",
   dataType: "Open Food Facts product",
+  imageUrl:
+    "https://images.openfoodfacts.org/images/products/748/927/022/650/front_en.12.200.jpg",
+  nutritionImageUrl: null,
   nutritionPreview: {
     calories: 375,
     proteinGrams: 75,
     carbohydrateGrams: 9.4,
     fatGrams: 3.1,
+  },
+};
+
+const usdaAsparagus = {
+  provider: "usda_fdc" as const,
+  externalId: "168390",
+  displayName: "Asparagus, raw",
+  brandName: null,
+  productName: "Asparagus, raw",
+  variantName: null,
+  gtin: null,
+  dataType: "Foundation",
+  imageUrl: null,
+  nutritionImageUrl: null,
+  nutritionPreview: {
+    calories: 20,
+    proteinGrams: 2.2,
+    carbohydrateGrams: 3.9,
+    fatGrams: 0.1,
   },
 };
 
@@ -45,118 +67,203 @@ function jsonResponse(data: unknown, status = 200) {
   });
 }
 
-describe("FoodSearchPicker online name search", () => {
-  it("keeps explicit branded-product name search visible alongside local matches", async () => {
-    const user = userEvent.setup();
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        jsonResponse({ kind: "candidates", candidates: [candidate] }),
-      )
-      .mockResolvedValueOnce(
-        jsonResponse(
+async function runCatalogDebounce() {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(300);
+  });
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+describe("FoodSearchPicker smart discovery", () => {
+  it("reports a resolved false from the initial saved-food refresh", async () => {
+    vi.useFakeTimers();
+    const onCatalogChanged = vi.fn(async () => false);
+
+    render(
+      <FoodSearchPicker
+        foods={[]}
+        search="asparagus"
+        onSearchChange={vi.fn()}
+        onAdd={vi.fn()}
+        onCatalogChanged={onCatalogChanged}
+      />,
+    );
+
+    await runCatalogDebounce();
+
+    expect(onCatalogChanged).toHaveBeenCalledWith("asparagus");
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Error code: SAVED_FOOD_SEARCH_FAILED",
+    );
+    expect(
+      screen.getByRole("button", { name: "Retry saved-food search" }),
+    ).toBeEnabled();
+  });
+
+  it("debounces the saved catalog, runs one explicit merged lookup, ranks a generic exact match first, shows source photos, and reuses the visit cache", async () => {
+    vi.useFakeTimers();
+    const unrelatedBranded = {
+      ...offCandidate,
+      externalId: "1234567890123",
+      gtin: "1234567890123",
+      displayName: "Snack Co — Crispy asparagus-flavored chips",
+      productName: "Crispy asparagus-flavored chips",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        kind: "candidates",
+        candidates: [unrelatedBranded, usdaAsparagus, offCandidate],
+        providers: [
+          { provider: "usda_fdc", status: "ok", resultCount: 1, message: null },
           {
-            kind: "imported",
-            foodId: "22222222-2222-4222-8222-222222222222",
-            slug: "gold-standard-whey-off-748927022650",
-            displayName: candidate.displayName,
-            reviewStatus: "pending_review",
-            planEligible: false,
+            provider: "open_food_facts",
+            status: "ok",
+            resultCount: 2,
+            message: null,
           },
-          201,
-        ),
-      );
+        ],
+      }),
+    );
     vi.stubGlobal("fetch", fetchMock);
-    const onSearchChange = vi.fn();
-    const onCatalogChanged = vi.fn(async () => undefined);
+    const onCatalogChanged = vi.fn(async () => true);
 
     function Harness() {
       const [search, setSearch] = useState("");
       return (
         <FoodSearchPicker
-          foods={[localFood]}
+          foods={[]}
           search={search}
-          onSearchChange={(value) => {
-            onSearchChange(value);
-            setSearch(value);
-          }}
+          onSearchChange={setSearch}
           onAdd={vi.fn()}
           onCatalogChanged={onCatalogChanged}
         />
       );
     }
 
-    render(<Harness />);
-    await user.type(
-      screen.getByRole("textbox", { name: "Search foods" }),
-      "Whey",
-    );
+    const { container } = render(<Harness />);
+    const input = screen.getByRole("textbox", {
+      name: "Search foods and products",
+    });
+    fireEvent.change(input, { target: { value: "asparagus" } });
 
-    expect(screen.getByText("Local Whey Protein")).toBeInTheDocument();
-    expect(
-      screen.getByRole("heading", {
-        name: "Search online by food or product name",
-      }),
-    ).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(299);
+    });
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(onCatalogChanged).not.toHaveBeenCalled();
 
-    await user.click(
-      screen.getByRole("button", { name: "Search online by name" }),
-    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(onCatalogChanged).toHaveBeenCalledWith("asparagus");
 
-    await screen.findByText(candidate.displayName);
+    fireEvent.click(screen.getByRole("button", { name: "Search all sources" }));
+    await act(async () => Promise.resolve());
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
-      action: "search_open_food_facts",
-      query: "Whey",
+      action: "search",
+      query: "asparagus",
     });
-    expect(screen.getByText("Local Whey Protein")).toBeInTheDocument();
-    expect(
-      screen.getByText(/nothing is saved until you import one/i),
-    ).toBeInTheDocument();
 
-    await user.click(
-      screen.getByRole("button", { name: "Import current record" }),
-    );
-
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
-      action: "import",
-      provider: "open_food_facts",
-      externalId: "748927022650",
-    });
+    const results = screen.getByLabelText("Food search results");
+    const headings = within(results).getAllByRole("heading", { level: 3 });
+    expect(headings[0]).toHaveTextContent("Asparagus, raw");
     expect(
-      await screen.findByText(/pending catalog review/i),
-    ).toBeInTheDocument();
+      screen.getByRole("img", {
+        name: /Optimum Nutrition.*package photo supplied by Open Food Facts/i,
+      }),
+    ).toHaveAttribute("src", offCandidate.imageUrl);
+    expect(container.querySelector('[data-layout="overflow-safe-food-search"]')).toBeTruthy();
+    expect(screen.queryByText(/barcode/i)).not.toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: "" } });
+    await runCatalogDebounce();
+    fireEvent.change(input, { target: { value: "asparagus" } });
+    await runCatalogDebounce();
+    fireEvent.click(screen.getByRole("button", { name: "Search all sources" }));
+    await act(async () => Promise.resolve());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps USDA name search available when Open Food Facts is unavailable", async () => {
+  it("requires an explicit meal destination before Add", async () => {
     const user = userEvent.setup();
-    const usdaCandidate = {
-      ...candidate,
-      provider: "usda_fdc" as const,
-      externalId: "2464134",
-      dataType: "Branded",
-    };
+    const onAdd = vi.fn();
+    render(
+      <FoodSearchPicker
+        foods={[localFood]}
+        search=""
+        onSearchChange={vi.fn()}
+        onAdd={onAdd}
+        onCatalogChanged={vi.fn()}
+      />,
+    );
+
+    const destination = screen.getByRole("combobox", {
+      name: "Destination for Local Whey Protein",
+    });
+    expect(destination).toHaveValue("breakfast");
+    await user.selectOptions(destination, "lunch");
+    await user.click(
+      screen.getByRole("button", { name: "Add Local Whey Protein to lunch" }),
+    );
+
+    expect(onAdd).toHaveBeenCalledWith("lunch", localFood);
+    expect(screen.getAllByRole("button", { name: /^Add .* to / })).toHaveLength(1);
+  });
+
+  it("keeps partial provider results usable and recovers from an import failure", async () => {
+    vi.useFakeTimers();
     const fetchMock = vi
       .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          kind: "candidates",
+          candidates: [offCandidate],
+          providers: [
+            {
+              provider: "usda_fdc",
+              status: "unavailable",
+              resultCount: 0,
+              message: "USDA FoodData Central could not be reached.",
+            },
+            {
+              provider: "open_food_facts",
+              status: "ok",
+              resultCount: 1,
+              message: null,
+            },
+          ],
+        }),
+      )
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
             data: null,
             error: {
-              message:
-                "The external food source is temporarily unavailable.",
+              code: "FOOD_SOURCE_UNAVAILABLE",
+              message: "Open Food Facts is temporarily unavailable.",
+              details: "Nothing was imported. Retry this source later.",
+              retryable: true,
+              action: { kind: "retry", label: "Retry import" },
             },
           }),
-          {
-            status: 503,
-            headers: { "content-type": "application/json" },
-          },
+          { status: 503, headers: { "content-type": "application/json" } },
         ),
       )
       .mockResolvedValueOnce(
-        jsonResponse({ kind: "candidates", candidates: [usdaCandidate] }),
+        jsonResponse(
+          {
+            kind: "imported",
+            displayName: offCandidate.displayName,
+            reviewStatus: "pending_review",
+          },
+          201,
+        ),
       );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -166,30 +273,181 @@ describe("FoodSearchPicker online name search", () => {
         search="chocolate whey"
         onSearchChange={vi.fn()}
         onAdd={vi.fn()}
+        onCatalogChanged={vi.fn(async () => true)}
+      />,
+    );
+    await runCatalogDebounce();
+    fireEvent.click(screen.getByRole("button", { name: "Search all sources" }));
+    await act(async () => Promise.resolve());
+    vi.useRealTimers();
+
+    expect(screen.getByText(/Some source results are unavailable/i)).toBeInTheDocument();
+    expect(screen.getByText(offCandidate.displayName)).toBeInTheDocument();
+    const destination = screen.getByRole("combobox", {
+      name: `Intended destination for ${offCandidate.displayName}`,
+    });
+    fireEvent.change(destination, { target: { value: "dinner" } });
+    const importButton = screen.getByRole("button", {
+      name: `Import ${offCandidate.displayName} for Dinner review`,
+    });
+
+    fireEvent.click(importButton);
+    await act(async () => Promise.resolve());
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Open Food Facts is temporarily unavailable.",
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Error code: FOOD_SOURCE_UNAVAILABLE",
+    );
+    expect(importButton).toBeEnabled();
+
+    fireEvent.click(importButton);
+    await act(async () => Promise.resolve());
+    expect(await screen.findByText(/Dinner is your intended destination/i)).toBeInTheDocument();
+    expect(screen.getByText("Imported for Dinner review")).toBeInTheDocument();
+    expect(importButton).toBeDisabled();
+  });
+
+  it("offers a retry after total search failure and restores results", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: null,
+            error: {
+              code: "FOOD_LOOKUP_UNAVAILABLE",
+              message: "Online food search is temporarily unavailable.",
+              details: "No external source was contacted.",
+              retryable: true,
+              action: { kind: "retry", label: "Retry search" },
+            },
+          }),
+          { status: 503, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          kind: "candidates",
+          candidates: [usdaAsparagus],
+          providers: [
+            { provider: "usda_fdc", status: "ok", resultCount: 1, message: null },
+            {
+              provider: "open_food_facts",
+              status: "ok",
+              resultCount: 0,
+              message: null,
+            },
+          ],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <FoodSearchPicker
+        foods={[]}
+        search="asparagus"
+        onSearchChange={vi.fn()}
+        onAdd={vi.fn()}
         onCatalogChanged={vi.fn()}
       />,
     );
-
-    await user.click(
-      screen.getByRole("button", { name: "Search online by name" }),
+    await runCatalogDebounce();
+    fireEvent.click(screen.getByRole("button", { name: "Search all sources" }));
+    await act(async () => Promise.resolve());
+    vi.useRealTimers();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Online food search is temporarily unavailable.",
     );
-    expect(
-      await screen.findByText(/select USDA above and search the same name/i),
-    ).toBeInTheDocument();
-
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: "Online food source" }),
-      "usda_fdc",
-    );
-    await user.click(
-      screen.getByRole("button", { name: "Search online by name" }),
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Error code: FOOD_LOOKUP_UNAVAILABLE",
     );
 
-    await screen.findByText(usdaCandidate.displayName);
+    fireEvent.click(screen.getByRole("button", { name: "Retry search" }));
+    await act(async () => Promise.resolve());
+    expect(await screen.findByText("Asparagus, raw")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
-      action: "search_usda",
-      query: "chocolate whey",
-    });
+  });
+
+  it("imports once, then retries only the saved-food refresh when refresh resolves false", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          kind: "candidates",
+          candidates: [offCandidate],
+          providers: [
+            {
+              provider: "usda_fdc",
+              status: "ok",
+              resultCount: 0,
+              message: null,
+            },
+            {
+              provider: "open_food_facts",
+              status: "ok",
+              resultCount: 1,
+              message: null,
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            kind: "imported",
+            displayName: offCandidate.displayName,
+            reviewStatus: "pending_review",
+          },
+          201,
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const onCatalogChanged = vi
+      .fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+
+    render(
+      <FoodSearchPicker
+        foods={[]}
+        search="chocolate whey"
+        onSearchChange={vi.fn()}
+        onAdd={vi.fn()}
+        onCatalogChanged={onCatalogChanged}
+      />,
+    );
+    await runCatalogDebounce();
+    fireEvent.click(screen.getByRole("button", { name: "Search all sources" }));
+    await act(async () => Promise.resolve());
+    vi.useRealTimers();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: `Import ${offCandidate.displayName} for Breakfast review`,
+      }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Error code: FOOD_IMPORT_REFRESH_FAILED",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(onCatalogChanged).toHaveBeenCalledTimes(2);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Refresh saved foods" }),
+    );
+
+    expect(await screen.findByText("Saved foods are up to date.")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(onCatalogChanged).toHaveBeenCalledTimes(3);
+    expect(
+      screen.getByRole("button", {
+        name: `Import ${offCandidate.displayName} for Breakfast review`,
+      }),
+    ).toBeDisabled();
   });
 });

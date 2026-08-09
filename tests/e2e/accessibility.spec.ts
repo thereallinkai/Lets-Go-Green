@@ -48,6 +48,50 @@ test("public layout is usable and free of high-impact axe violations at required
   }
 });
 
+test("registration and onboarding controls reflow at required widths", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  // This test checks independent deep links. Clear saved demo progress before
+  // any application script can restore a step from the preceding navigation.
+  await page.addInitScript(() => {
+    window.localStorage.removeItem("lets-go-green-onboarding-draft:demo");
+  });
+  for (const width of [375, 768, 1280, 1440]) {
+    await page.setViewportSize({ width, height: 1_000 });
+
+    await page.goto("/register");
+    await expect(
+      page.getByRole("heading", { name: "Let's start with you." }),
+    ).toBeVisible();
+    await expectNoHorizontalOverflow(page, `registration at ${width}px`);
+
+    await page.goto("/onboarding?step=3");
+    await expect(
+      page.getByRole("heading", { name: "What works on your plate?" }),
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-layout="overflow-safe-food-search"]'),
+    ).toBeVisible();
+    await expectNoHorizontalOverflow(page, `food onboarding at ${width}px`);
+
+    await page.goto("/onboarding?step=5");
+    await expect(
+      page.getByRole("heading", {
+        name: "Add the context your plan needs.",
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("combobox", { name: "Choose centimeters" }),
+    ).toBeVisible();
+    await expectNoHorizontalOverflow(page, `height onboarding at ${width}px`);
+
+    if (width === 375 || width === 1440) {
+      await expectNoHighImpactViolations(page);
+    }
+  }
+});
+
 test("protected mock pages have no serious or critical axe violations", async ({
   page,
 }) => {
@@ -100,7 +144,7 @@ test("Today, Calendar, Profile, and the tutorial reflow at required widths", asy
     await page.getByRole("link", { name: "Replay tutorial" }).click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
-    await expect(dialog.locator(".tour-progress span")).toHaveCount(6);
+    await expect(dialog.locator(".tour-progress span")).toHaveCount(7);
     await expectNoHorizontalOverflow(page, `tutorial at ${width}px`);
     await expectNoHighImpactViolations(page);
     await dialog
@@ -227,7 +271,7 @@ test("tutorial actions remain reachable in a short mobile viewport", async ({
   await page.getByRole("link", { name: "Replay tutorial" }).click();
 
   const dialog = page.getByRole("dialog");
-  for (let step = 1; step < 6; step += 1) {
+  for (let step = 1; step < 7; step += 1) {
     await dialog.getByRole("button", { name: /Next/ }).click();
   }
   await expect(

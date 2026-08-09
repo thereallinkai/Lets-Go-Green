@@ -1,10 +1,14 @@
 import { BrandLink } from "@/components/brand-link";
+import { AppearanceControl } from "@/components/appearance-control";
 
 export function AuthShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="auth-shell">
       <aside className="auth-aside">
-        <BrandLink />
+        <div className="auth-aside-top">
+          <BrandLink />
+          <AppearanceControl />
+        </div>
         <div className="auth-quote">
           <p>A useful plan should make your day feel clearer, not smaller.</p>
           <small>

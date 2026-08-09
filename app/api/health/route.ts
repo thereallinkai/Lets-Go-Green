@@ -7,7 +7,7 @@ import {
 import { createSupabaseAdminClient } from "@/src/lib/supabase/admin";
 
 const EXPECTED_MIGRATION =
-  "20260802000000_add_immutable_date_of_birth";
+  "20260802020000_share_label_by_product_identity";
 
 export async function GET() {
   let database: "reachable" | "unavailable" | "not_configured" = "not_configured";

@@ -31,6 +31,16 @@ describe("food label input", () => {
   it("requires at least one balance category and preserves whey categories", () => {
     const parsed = foodLabelDataSchema.parse(whey);
     expect(parsed.categorySlugs).toEqual(["protein", "supplement"]);
+    expect(parsed.shareNormalizedProduct).toBe(false);
+  });
+
+  it("accepts an explicit normalized-product sharing choice without making it the default", () => {
+    expect(
+      foodLabelDataSchema.parse({
+        ...whey,
+        shareNormalizedProduct: true,
+      }).shareNormalizedProduct,
+    ).toBe(true);
   });
 
   it("requires explicit confirmation at the final boundary", () => {
