@@ -113,11 +113,13 @@ describe("authentication routes use safe public errors", () => {
       data: { sent: true },
       error: null,
     });
+    const expectedOrigin =
+      process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost";
     expect(resetPasswordForEmail).toHaveBeenCalledWith(
       "unknown@example.test",
       {
         redirectTo:
-          "http://localhost/auth/callback?purpose=recovery&next=/reset-password",
+          `${expectedOrigin}/auth/callback?purpose=recovery&next=/reset-password`,
       },
     );
   });
