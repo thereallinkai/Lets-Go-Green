@@ -35,6 +35,22 @@ function firstText(...values: unknown[]): string | null {
   return null;
 }
 
+function openFoodFactsImageUrl(...values: unknown[]): string | null {
+  const candidate = firstText(...values);
+  if (!candidate) return null;
+  try {
+    const url = new URL(candidate);
+    const hostname = url.hostname.toLocaleLowerCase("en-US");
+    return url.protocol === "https:" &&
+      (hostname === "openfoodfacts.org" ||
+        hostname.endsWith(".openfoodfacts.org"))
+      ? url.toString()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function stringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
@@ -135,6 +151,14 @@ export function openFoodFactsCandidateFromProduct(
     variantName: null,
     gtin: barcode,
     dataType: "Open Food Facts product",
+    imageUrl: openFoodFactsImageUrl(
+      product.image_front_small_url,
+      product.image_front_url,
+    ),
+    nutritionImageUrl: openFoodFactsImageUrl(
+      product.image_nutrition_small_url,
+      product.image_nutrition_url,
+    ),
     nutritionPreview: {
       calories:
         nutrient(nutriments, "energy-kcal") ??
@@ -165,8 +189,8 @@ export async function searchOpenFoodFactsProducts(
   }
 
   // Open Food Facts documents full-text search through its legacy CGI search
-  // route. Keep this request explicit (never search-as-you-type), small, and
-  // field-limited because the provider rate-limits search traffic.
+  // route. The caller must gate this behind an explicit user action and cache
+  // repeated queries because the provider rate-limits search traffic.
   const url = new URL("https://world.openfoodfacts.org/cgi/search.pl");
   url.searchParams.set("search_terms", normalizedQuery);
   url.searchParams.set("search_simple", "1");
@@ -185,6 +209,10 @@ export async function searchOpenFoodFactsProducts(
       "brands",
       "brand_owner",
       "quantity",
+      "image_front_small_url",
+      "image_front_url",
+      "image_nutrition_small_url",
+      "image_nutrition_url",
       "nutriments",
     ].join(","),
   );

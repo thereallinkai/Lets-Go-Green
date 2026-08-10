@@ -1,0 +1,61 @@
+.notice {
+  width: 100%;
+}
+
+.content {
+  min-width: 0;
+  flex: 1;
+}
+
+.message,
+.details,
+.retryStatus {
+  margin: 0;
+}
+
+.message {
+  font-weight: 750;
+  line-height: 1.45;
+}
+
+.details {
+  margin-top: 0.28rem;
+  line-height: 1.55;
+}
+
+.metadata {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+  margin-top: 0.55rem;
+  font-size: 0.76rem;
+}
+
+.code {
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 0.12rem 0.48rem;
+  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Consolas,
+    monospace;
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.retryStatus {
+  opacity: 0.88;
+}
+
+.actionRow {
+  margin-top: 0.7rem;
+}
+
+.actionRow :global(.button) {
+  min-height: 2.55rem;
+  padding: 0.58rem 0.9rem;
+}
+
+.nextStep {
+  margin: 0.62rem 0 0;
+  font-weight: 700;
+}

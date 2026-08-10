@@ -586,16 +586,11 @@ export function TodayDashboard({
                             <li className="snack-food-result" key={food.id}>
                               <div className="snack-food-result-copy">
                                 <strong>{food.english_name}</strong>
-                                {food.brand_name ||
-                                food.variant_name ||
-                                food.gtin ? (
+                                {food.brand_name || food.variant_name ? (
                                   <p className="field-help">
                                     {[food.brand_name, food.variant_name]
                                       .filter(Boolean)
                                       .join(" · ")}
-                                    {food.gtin
-                                      ? ` · barcode ${food.gtin}`
-                                      : ""}
                                   </p>
                                 ) : null}
                                 <small className="source-label">

@@ -1,10 +1,10 @@
-export const CURRENT_PRODUCT_TOUR_VERSION = 2;
+export const CURRENT_PRODUCT_TOUR_VERSION = 3;
 export const PRODUCT_TOUR_OPEN_EVENT = "lets-go-green:open-product-tour";
 export const PRODUCT_TOUR_REPLAY_REQUEST_KEY =
-  "lets-go-green-product-tour-replay-requested-v2";
+  "lets-go-green-product-tour-replay-requested-v3";
 export const PRODUCT_TOUR_REPLAY_HASH = "#tutorial";
 export const PRODUCT_TOUR_SESSION_SKIP_KEY =
-  "lets-go-green-product-tour-skipped-v2";
+  "lets-go-green-product-tour-skipped-v3";
 
 export type ProductTourStep = {
   eyebrow: string;
@@ -23,12 +23,20 @@ export const PRODUCT_TOUR_STEPS: readonly ProductTourStep[] = [
       "Nothing is silently accepted for you. You stay in control of your meals, profile, and plan versions.",
   },
   {
+    eyebrow: "Appearance and inputs",
+    title: "Match your device, keep calculations grounded",
+    description:
+      "System appearance follows your device's live Light or Dark setting. Onboarding uses the height you selected alongside age, weight, activity, and timeline inputs.",
+    detail:
+      "You can choose a Light or Dark override in Settings. Height feeds the deterministic energy range; AI receives the confirmed value but does not guess or recalculate it.",
+  },
+  {
     eyebrow: "Foods and products",
     title: "Choose the exact food you mean",
     description:
-      "Search the saved catalog first, then search USDA or Open Food Facts by food, brand, product, or flavor. A barcode is optional.",
+      "Search once by food, brand, product, or flavor. Saved catalog, USDA, and Open Food Facts matches appear together; use a private package-label photo when no source match is available.",
     detail:
-      "Online search runs only when you press its button. Review the source and nutrition before importing; if a product is missing, photograph its label and enter exactly what it says.",
+      "Online search runs only when you press its button. Choose the intended meal, review source and nutrition, and remember that an imported source record stays pending until reviewed. If a product is missing, photograph its label and enter exactly what it says.",
   },
   {
     eyebrow: "Today",
@@ -60,6 +68,6 @@ export const PRODUCT_TOUR_STEPS: readonly ProductTourStep[] = [
     description:
       "Open your avatar for profile details, device-time-zone controls, tutorial replay, settings, and shopping shortcuts.",
     detail:
-      "Nearby-shopping buttons open clearly labeled external map searches. They do not claim that a product is in stock.",
+      "Nearby-shopping buttons open clearly labeled external map searches. They do not claim that a product is in stock. Settings also lets you replay this tutorial and choose System, Light, or Dark appearance.",
   },
 ] as const;

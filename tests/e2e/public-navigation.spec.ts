@@ -78,8 +78,18 @@ test("registration confirms the derived age before creating the account", async 
   await dialog
     .getByRole("button", { name: "Confirm and create account" })
     .click();
-  await expect(page).toHaveURL(
-    /\/onboarding\?step=2&email=taylor%40example\.test$/,
+  await expect(page).toHaveURL(/\/onboarding\?step=2$/);
+  await expect(page.getByRole("textbox", { name: "Account email" })).toHaveValue(
+    "taylor@example.test",
   );
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.sessionStorage.getItem(
+          "lets-go-green-registration-email-handoff",
+        ),
+      ),
+    )
+    .toBeNull();
   expect(registrationRequests).toBe(1);
 });

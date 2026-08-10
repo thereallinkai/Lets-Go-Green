@@ -1,8 +1,13 @@
 import { z } from "zod";
 import type { Database, Json } from "@/src/types/database";
 import { localDateInTimeZone } from "@/src/lib/domain";
-import { apiError, apiSuccess } from "@/src/lib/api-response";
+import { apiError, apiSuccess, publicError } from "@/src/lib/api-response";
 import { isDevelopmentDemo } from "@/src/lib/env";
+import {
+  classifyOnboardingCompletionError,
+  classifyOnboardingDraftError,
+  onboardingTransportError,
+} from "@/src/lib/onboarding-error-taxonomy";
 import {
   normalizeMealFoodSlugs,
   parseOptionalHeight,
@@ -91,6 +96,8 @@ type OnboardingRpcResult = {
   error: OnboardingRpcError | null;
 };
 
+class AuthLookupUnavailableError extends Error {}
+
 function toJson(value: unknown): Json {
   return JSON.parse(JSON.stringify(value)) as Json;
 }
@@ -103,9 +110,32 @@ function isCalendarDate(value: string) {
 }
 
 async function requireUser() {
-  const supabase = await createSupabaseServerClient();
-  const { data } = await supabase.auth.getUser();
-  return { supabase, user: data.user };
+  try {
+    const supabase = await createSupabaseServerClient();
+    const { data, error } = await supabase.auth.getUser();
+    return { supabase, user: data.user, authError: error };
+  } catch {
+    throw new AuthLookupUnavailableError();
+  }
+}
+
+function authServiceUnavailable(operation: "load" | "save") {
+  const isLoad = operation === "load";
+  return apiError(
+    "AUTH_SERVICE_UNAVAILABLE",
+    "Your account session could not be checked right now.",
+    503,
+    {
+      details: isLoad
+        ? "Server-saved onboarding progress was not loaded. Your browser copy is unchanged; check the connection and try again."
+        : "The server did not save this change. Your browser copy is unchanged; check the connection and try again.",
+      retryable: true,
+      action: {
+        kind: "retry",
+        label: isLoad ? "Try loading again" : "Try saving again",
+      },
+    },
+  );
 }
 
 async function completeOnboardingWithRetry(
@@ -131,58 +161,138 @@ async function completeOnboardingWithRetry(
 }
 
 export async function GET() {
-  if (isDevelopmentDemo()) return apiSuccess({ currentStep: null, draft: null });
+  if (isDevelopmentDemo()) {
+    return apiSuccess({ currentStep: null, draft: null, updatedAt: null });
+  }
   try {
-    const { supabase, user } = await requireUser();
-    if (!user) return apiError("SESSION_EXPIRED", "Log in to resume onboarding.", 401);
+    const { supabase, user, authError } = await requireUser();
+    if (authError) {
+      return authServiceUnavailable("load");
+    }
+    if (!user) {
+      return apiError("SESSION_EXPIRED", "Log in to resume onboarding.", 401, {
+        details: "Any browser-saved onboarding information is unchanged.",
+        retryable: false,
+        action: { kind: "navigate", label: "Log in", href: "/login" },
+      });
+    }
     const { data, error } = await supabase
       .from("onboarding_drafts")
-      .select("current_step,validated_data")
+      .select("current_step,validated_data,updated_at")
       .eq("user_id", user.id)
       .maybeSingle();
-    if (error) return apiError("DRAFT_LOAD_FAILED", "Onboarding progress could not be loaded.", 500);
+    if (error) {
+      return publicError(classifyOnboardingDraftError(error, "load"));
+    }
     return apiSuccess({
       currentStep: data?.current_step ?? null,
       draft: data?.validated_data ?? null,
+      updatedAt: data?.updated_at ?? null,
     });
-  } catch {
-    return apiError("SERVICE_UNAVAILABLE", "Onboarding services are temporarily unavailable.", 503);
+  } catch (error) {
+    if (error instanceof AuthLookupUnavailableError) {
+      return authServiceUnavailable("load");
+    }
+    return publicError(onboardingTransportError("load"));
   }
 }
 
 export async function PATCH(request: Request) {
   const parsed = patchSchema.safeParse(await request.json().catch(() => null));
-  if (!parsed.success) return apiError("INVALID_DRAFT", "The onboarding draft was not valid.", 422);
-  if (isDevelopmentDemo()) return apiSuccess({ saved: true });
-  try {
-    const { supabase, user } = await requireUser();
-    if (!user) return apiError("SESSION_EXPIRED", "Log in to save onboarding progress.", 401);
-    const { error } = await supabase.from("onboarding_drafts").upsert({
-      user_id: user.id,
-      current_step: parsed.data.currentStep,
-      validated_data: toJson(parsed.data.draft),
+  if (!parsed.success) {
+    return apiError("INVALID_DRAFT", "The onboarding draft was not valid.", 422, {
+      details: "Review the current step before saving again.",
+      retryable: false,
+      action: { kind: "edit", label: "Review this step" },
     });
-    if (error) return apiError("DRAFT_SAVE_FAILED", "Onboarding progress could not be saved.", 500);
-    return apiSuccess({ saved: true });
-  } catch {
-    return apiError("SERVICE_UNAVAILABLE", "Onboarding services are temporarily unavailable.", 503);
+  }
+  if (isDevelopmentDemo()) return apiSuccess({ saved: true, updatedAt: null });
+  try {
+    const { supabase, user, authError } = await requireUser();
+    if (authError) {
+      return authServiceUnavailable("save");
+    }
+    if (!user) {
+      return apiError("SESSION_EXPIRED", "Log in to save onboarding progress.", 401, {
+        details: "The browser copy of your information is unchanged.",
+        retryable: false,
+        action: { kind: "navigate", label: "Log in", href: "/login" },
+      });
+    }
+    const { data, error } = await supabase
+      .from("onboarding_drafts")
+      .upsert({
+        user_id: user.id,
+        current_step: parsed.data.currentStep,
+        validated_data: toJson(parsed.data.draft),
+      })
+      .select("updated_at")
+      .single();
+    if (error) {
+      return publicError(classifyOnboardingDraftError(error, "save"));
+    }
+    return apiSuccess({ saved: true, updatedAt: data.updated_at });
+  } catch (error) {
+    if (error instanceof AuthLookupUnavailableError) {
+      return authServiceUnavailable("save");
+    }
+    return publicError(onboardingTransportError("save"));
   }
 }
 
 export async function PUT(request: Request) {
   const parsed = completionSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {
-    return apiError("INVALID_ONBOARDING", "Review the required goal and profile details.", 422);
+    return apiError(
+      "INVALID_ONBOARDING",
+      "Review the required goal and profile details.",
+      422,
+      {
+        details: "Correct the marked fields before completing onboarding.",
+        retryable: false,
+        action: { kind: "edit", label: "Review onboarding" },
+      },
+    );
   }
   if (!parsed.data.targetDate) {
-    return apiError("TARGET_DATE_REQUIRED", "Choose a target date before completing onboarding.", 422);
+    return apiError(
+      "TARGET_DATE_REQUIRED",
+      "Choose a target date before completing onboarding.",
+      422,
+      {
+        details: "Return to Goal and timeline, then choose today or a future date.",
+        retryable: false,
+        action: { kind: "edit", label: "Choose target date" },
+      },
+    );
   }
   const parsedHeight = parseOptionalHeight(parsed.data.height);
   if (!parsedHeight.ok) {
     return apiError(
       "INVALID_HEIGHT",
-      "Enter a height from 50 to 300 cm, such as 175 cm or 5 ft 9 in, or leave it blank.",
+      "Enter a height from 50 to 300 cm, such as 175 cm or 5 ft 9 in.",
       422,
+      {
+        details: "Use centimetres or feet and inches in onboarding Step 5.",
+        retryable: false,
+        action: { kind: "edit", label: "Edit height" },
+      },
+    );
+  }
+  if (parsedHeight.heightCm === null) {
+    return apiError(
+      "MISSING_HEIGHT",
+      "Choose your height before completing onboarding.",
+      422,
+      {
+        details: "Return to Step 5 and select a height before saving the final step.",
+        retryable: false,
+        action: {
+          kind: "navigate",
+          label: "Choose height",
+          href: "/onboarding?step=5",
+        },
+      },
     );
   }
   const currentWeight = parseWeightKg(
@@ -194,6 +304,11 @@ export async function PUT(request: Request) {
       "INVALID_CURRENT_WEIGHT",
       "Enter a current weight from 20 to 500 kg, or the equivalent in pounds.",
       422,
+      {
+        details: "Return to Goal and timeline and enter a number in the selected unit.",
+        retryable: false,
+        action: { kind: "edit", label: "Edit current weight" },
+      },
     );
   }
   const targetWeight = parseWeightKg(
@@ -205,6 +320,11 @@ export async function PUT(request: Request) {
       "INVALID_TARGET_WEIGHT",
       "Enter a target weight from 20 to 500 kg, or the equivalent in pounds.",
       422,
+      {
+        details: "Return to Goal and timeline and enter a number in the selected unit.",
+        retryable: false,
+        action: { kind: "edit", label: "Edit target weight" },
+      },
     );
   }
   if (isDevelopmentDemo()) return apiSuccess({ completed: true, goalId: "demo-goal" });
@@ -239,6 +359,11 @@ export async function PUT(request: Request) {
         "INVALID_TIME_ZONE",
         "Choose a supported time zone before completing onboarding.",
         422,
+        {
+          details: "Allow automatic time-zone detection or select a valid IANA time zone.",
+          retryable: false,
+          action: { kind: "edit", label: "Choose time zone" },
+        },
       );
     }
     if (!isCalendarDate(parsed.data.targetDate)
@@ -247,6 +372,11 @@ export async function PUT(request: Request) {
         "INVALID_TARGET_DATE",
         "Choose a target date that is today or later.",
         422,
+        {
+          details: "Return to Goal and timeline and choose today or a future date.",
+          retryable: false,
+          action: { kind: "edit", label: "Edit target date" },
+        },
       );
     }
     const dietaryRestrictions = parsed.data.restrictions
@@ -260,6 +390,11 @@ export async function PUT(request: Request) {
         "TOO_MANY_RESTRICTIONS",
         "Use no more than 50 comma-separated allergies or dietary restrictions.",
         422,
+        {
+          details: "Remove duplicates and keep only current dietary restrictions and allergies.",
+          retryable: false,
+          action: { kind: "edit", label: "Review restrictions" },
+        },
       );
     }
 
@@ -298,76 +433,16 @@ export async function PUT(request: Request) {
       console.error("complete_onboarding_from_slugs RPC failed", {
         code: error.code,
       });
-      if (error.code === "42501") {
-        if (error.message?.includes("Email verification")) {
-          return apiError(
-            "EMAIL_VERIFICATION_REQUIRED",
-            "Verify your email before completing onboarding.",
-            409,
-          );
-        }
-        return apiError(
-          "SESSION_EXPIRED",
-          "Log in again to complete onboarding. Your information is still saved in this browser.",
-          401,
-        );
-      }
-      if (error.code === "PGRST202" || error.code === "42883") {
-        return apiError(
-          "ONBOARDING_DATABASE_OUTDATED",
-          "Restart with npm run dev:all so the local database update can finish, then try again.",
-          503,
-        );
-      }
-      if (
-        error.code === "23514"
-        && error.message?.includes("Terms and privacy acceptance")
-      ) {
-        return apiError(
-          "LEGAL_ACCEPTANCE_REQUIRED",
-          "Your Terms and Privacy acceptance could not be verified. Sign in again or recreate this test account.",
-          409,
-        );
-      }
-      if (
-        error.code === "23514"
-        && error.message?.includes("account profile")
-      ) {
-        return apiError(
-          "PROFILE_REQUIRED",
-          "Complete the account profile before onboarding.",
-          409,
-        );
-      }
-      if (
-        error.code === "23514"
-        && error.message?.includes("selected food")
-      ) {
-        return apiError(
-          "FOOD_SELECTION_CHANGED",
-          "One or more meal selections changed or still need source and safety review. Review the foods and try again.",
-          409,
-        );
-      }
-      if (error.code === "22023") {
-        return apiError(
-          "INVALID_ONBOARDING",
-          "Review the meal preferences and required profile details.",
-          422,
-        );
-      }
-      if (error.code === "23505") {
-        return apiError(
-          "DUPLICATE_MEAL_FOOD",
-          "A food was selected more than once for the same meal. Review the meal selections and try again.",
-          409,
-        );
-      }
-      return apiError("ONBOARDING_SAVE_FAILED", "The final onboarding step could not be saved.", 500);
+      return publicError(classifyOnboardingCompletionError(error));
+    }
+    if (!goalId) {
+      return publicError(
+        classifyOnboardingCompletionError({ code: "UNEXPECTED_RESULT" }),
+      );
     }
     return apiSuccess({ completed: true, goalId });
   } catch {
     console.error("complete_onboarding transport unavailable");
-    return apiError("SERVICE_UNAVAILABLE", "Onboarding services are temporarily unavailable.", 503);
+    return publicError(onboardingTransportError("complete"));
   }
 }

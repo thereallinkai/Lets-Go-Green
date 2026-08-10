@@ -12,7 +12,7 @@ export default function TermsPage() {
         <BrandLink />
         <Link className="text-link" href="/register">Back to signup</Link>
       </header>
-      <p className="eyebrow">Version 1.1 · July 28, 2026</p>
+      <p className="eyebrow">Version 1.2 · August 9, 2026</p>
       <h1>Terms of Use</h1>
       <p>
         {BRAND.name} offers general wellness information, meal-planning tools,
@@ -37,9 +37,11 @@ export default function TermsPage() {
       <h2>Your content and account</h2>
       <p>
         You retain responsibility for information you enter and for accurately
-        transcribing a package label. When a confirmed label has a barcode, you
-        permit the app to create a non-personal, normalized product-facts record
-        for the pending-review shared catalog. Raw label photos remain private.
+        transcribing a package label. A confirmed transcription creates a
+        private product for your account. Only when you separately select the
+        sharing option may the app create a non-personal, normalized
+        product-facts record for the pending-review shared catalog. Raw label
+        photos, account identifiers, and free-form notes remain private.
         You may export your account data through Settings. Account deletion must
         be implemented before a public production launch. Legal and security
         records may be retained when required to protect users or comply with law.

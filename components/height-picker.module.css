@@ -1,0 +1,144 @@
+.picker {
+  display: grid;
+  gap: 0.8rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.legend {
+  margin-bottom: 0.15rem;
+  color: var(--ink);
+  font-size: 0.84rem;
+  font-weight: 760;
+}
+
+.unitSwitch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.35rem;
+  padding: 0.3rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+}
+
+.unitButton {
+  min-height: 42px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 760;
+  cursor: pointer;
+  transition:
+    background-color 180ms ease,
+    box-shadow 180ms ease,
+    color 180ms ease,
+    transform 160ms ease;
+}
+
+.unitButton:hover {
+  color: var(--ink);
+}
+
+.unitButton:active {
+  transform: scale(1.025);
+}
+
+.unitButton[aria-pressed="true"] {
+  background: var(--accent-dark);
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--accent-dark) 22%, transparent);
+  color: var(--on-accent, #fff);
+}
+
+.selectGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.selectGridSingle {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.selectLabel {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.selectLabel select {
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--paper-elevated) 88%, transparent);
+  padding: 0.72rem 0.85rem;
+  color: var(--ink);
+  outline: none;
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.selectLabel select:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent-dark) 48%, var(--line));
+}
+
+.selectLabel select:focus-visible {
+  border-color: var(--accent-dark);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+.selectLabel select:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  min-height: 48px;
+  margin: 0;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--accent-pale) 72%, var(--surface));
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.summary strong {
+  color: var(--ink);
+}
+
+.invalid .unitSwitch,
+.invalid select {
+  border-color: var(--danger);
+}
+
+@media (max-width: 420px) {
+  .selectGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .unitButton {
+    transition: none;
+  }
+
+  .unitButton:active {
+    transform: none;
+  }
+}

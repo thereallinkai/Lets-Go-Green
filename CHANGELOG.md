@@ -3,6 +3,44 @@
 User-visible application releases are recorded here. Version identifiers follow
 the policy in [VERSIONING.md](VERSIONING.md).
 
+## 1.0.0-beta.3 — 2026-08-09
+
+**Let's Go Green! 1.0 Beta 3** focuses on a safer, clearer registration and
+onboarding test path.
+
+- Added System, Light, and Dark appearance modes. System follows the live
+  device/macOS appearance without a light-theme flash, while explicit
+  overrides persist locally.
+- Replaced generic registration and onboarding failures with stable, safe error
+  codes, concrete explanations, next actions, and retry guidance; duplicate
+  registration emails are now identified while login and recovery remain
+  account-enumeration safe.
+- Hardened credential forms against pre-hydration browser submission and moved
+  the verification-email handoff out of the onboarding URL into one-time,
+  short-lived same-tab storage.
+- Published Terms of Use 1.2 and Privacy Notice 1.3, effective August 9, 2026,
+  for the explicit reusable-product opt-in and Beta 3 browser-data boundaries.
+- Scoped browser onboarding drafts to the authenticated account, safely removed
+  unattributable legacy global drafts, compared browser/account update times,
+  and hardened callback redirects and blocked-storage recovery.
+- Rebuilt food discovery as one overflow-safe, explicitly submitted search that
+  ranks saved foods with USDA and Open Food Facts name matches, shows available
+  product photos and nutrition previews, and makes the intended meal clear.
+- Removed the barcode-scanning workflow from onboarding. The photo-first label
+  path never guesses nutrition: the user must compare and confirm every value,
+  and normalized cross-account reuse requires a separate explicit opt-in while
+  the photo and account identity remain private.
+- Migrated earlier shared-label catalog rows by replacing legacy photo-derived
+  public hashes with hashes of normalized, non-photo facts. Records linked to a
+  Terms 1.1 acceptance remain pending review, unlinked rows are rejected, and
+  every owner-private food and private evidence image is preserved.
+- Made height a required list selection in centimeters or feet and inches, used
+  it in the deterministic energy estimate, and added a database guard for
+  completed onboarding.
+- Added directional onboarding-step motion, staggered search results, polished
+  responsive spacing, richer interaction feedback, and reduced-motion-safe
+  behavior.
+
 ## 1.0.0-beta.2 — 2026-08-02
 
 **Let's Go Green! 1.0 Beta 2** strengthens account setup and gives the complete

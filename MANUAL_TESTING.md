@@ -68,11 +68,11 @@ software directly on your computer.
 
     ```dotenv
     USDA_FDC_API_KEY=
-    FOOD_LOOKUP_USER_AGENT=LetsGoGreen/1.0.0-beta.2 (https://github.com/thereallinkai/Lets-Go-Green)
+    FOOD_LOOKUP_USER_AGENT=LetsGoGreen/1.0.0-beta.3 (https://github.com/thereallinkai/Lets-Go-Green)
     ```
 
     Restart `npm run dev:all` after changing environment values. Open Food Facts
-    name and barcode lookup need outbound network access but no API key. If the
+    name lookup needs outbound network access but no API key. If the
     environment blocks a provider, record that live-provider case as blocked,
     not passed; the local catalog and label-upload cases must still be tested.
 
@@ -145,6 +145,9 @@ Use a signed-out private/incognito window.
   email template calls the product **Cutting Plan**.
 - [ ] The green visual system has readable contrast, and page/dialog transitions
   do not hide controls or shift focus unexpectedly.
+- [ ] **System** appearance follows a live operating-system/macOS Light/Dark
+  change. **Light** and **Dark** override it, survive reload, and switching back
+  to **System** removes the override without a theme flash.
 
 At widths 375, 768, 1280, and 1440 pixels, confirm there is no horizontal page
 scrolling.
@@ -187,11 +190,23 @@ Complete every field and select **Create account**:
   while pending, and continues to email verification after success.
 - [ ] Escape closes the dialog before submission, and Tab/Shift+Tab remain
   trapped inside it while open.
+- [ ] Registering the same verified email again reports
+  `EMAIL_ALREADY_REGISTERED`, explains that the email is already used, and
+  offers login or password recovery rather than a generic failure.
+- [ ] Invalid email, weak or breached password, CAPTCHA, rate limit,
+  configuration, and network/service failures each show a safe stable reference
+  code, a concrete explanation, and a relevant next action.
+- [ ] Login and password recovery never reveal whether an arbitrary email exists;
+  their concrete messages remain deliberately account-enumeration safe.
 
 ### Create and verify Account A
 
 1. Complete registration with Account A.
 2. Confirm the app goes to onboarding step 2 and displays the submitted email.
+   The address bar must contain only `/onboarding?step=2`: it must not contain
+   an `email` parameter or the submitted address. Reload once and confirm the
+   one-time email handoff has already been consumed rather than remaining in
+   browser storage.
 3. Before using the real code:
 
    - [ ] Submit fewer than six digits; the app asks for all six digits.
@@ -224,12 +239,35 @@ Perform the main path with Account A. Use **Save and exit**, browser refresh,
 Back, and the section **Edit** links at least once to prove the draft is
 resumable.
 
+### Draft isolation and browser-storage recovery
+
+- [ ] In one ordinary browser profile, save a distinctive incomplete draft for
+  Account A, sign out, and sign in as Account B. Account B never restores
+  Account A's values; returning to Account A restores only Account A's draft.
+- [ ] In a disposable controlled test, place fake non-sensitive values under the
+  old unscoped `lets-go-green-onboarding-draft` and
+  `cutting-plan-onboarding-draft` keys. Reloading onboarding removes both keys
+  without displaying or copying their contents into either account.
+- [ ] Give the scoped browser draft a `savedAt` later than the authenticated
+  account draft's `updatedAt`, then reverse the ordering in a second run. The
+  newer copy wins in both runs regardless of which response finishes first.
+- [ ] In a controlled browser test, make access to `localStorage` throw a
+  `SecurityError`. Onboarding remains usable, loads and saves the authenticated
+  account copy, and truthfully displays **Browser storage unavailable** instead
+  of claiming a browser save.
+
 ### Step 3: food preferences
 
-- [ ] Search is case-insensitive and matches generic names, categories, brands,
-  exact product names, variants, and an exact GTIN/barcode.
+- [ ] Typing filters saved foods immediately and is case-insensitive across
+  generic names, categories, brands, exact product names, and variants.
+- [ ] Typing alone never requests an online provider. The explicit **Search**
+  action sends one normalized name query to USDA and Open Food Facts and reuses
+  the result during the visit.
 - [ ] Generic foods and branded products are visibly distinguishable. A branded
-  result shows its brand, product, variant, and GTIN when those values exist.
+  result shows its brand, product, and flavor or variant when those values exist.
+- [ ] Saved and source-reported candidates appear in one relevance-ranked list;
+  available provider photos animate into place without causing horizontal
+  overflow or shifting the controls.
 - [ ] Catalog foods show category badges, verification/review state, and whether
   the record is eligible for generated plans.
 - [ ] Expanding **Nutrition facts** shows the stated basis and every available
@@ -237,7 +275,11 @@ resumable.
 - [ ] Source attribution and a source link appear when provided. The UI never
   labels USDA, Open Food Facts, or a user transcription as independently
   reviewed unless its stored status says so.
-- [ ] A food can be added independently to breakfast, lunch, and dinner.
+- [ ] Every plan-eligible saved result has a clearly labeled Breakfast, Lunch,
+  or Dinner destination and can be added independently to each meal.
+- [ ] Every external candidate labels its intended meal **after review**;
+  importing names that meal but does not falsely claim the pending item was
+  added to the plan.
 - [ ] Adding the same food twice to one meal does not duplicate it.
 - [ ] Remove controls delete the correct item.
 - [ ] Up/down controls reorder an item and correctly disable at the first/last
@@ -277,14 +319,19 @@ Use a future target date for the main path.
 
 ### Step 5: lifestyle and safety
 
+- [ ] Height is required and uses a centimeters list or separate feet/inches
+  lists; there is no free-text height field.
+- [ ] Switching metric/imperial height display preserves the equivalent height,
+  and 50–300 cm bounds are enforced before review.
 - [ ] On first entry, the IANA time zone defaults to
   `Intl.DateTimeFormat().resolvedOptions().timeZone` for this browser.
 - [ ] The browser does not display a location/geolocation permission prompt to
   determine the time zone.
 - [ ] Activity level and IANA time zone can still be selected manually.
 - [ ] Strength-training days accepts only whole numbers from 0 through 7.
-- [ ] Height, allergies, dietary restrictions, safety context, and notes are
-  clearly optional.
+- [ ] The selected height appears on Step 6 and is included in the deterministic
+  energy estimate and plan-provider context. Allergies, dietary restrictions,
+  safety context, and notes remain clearly optional.
 - [ ] Selecting **Under 18**, pregnancy/nursing, eating-disorder history,
   relevant medical concern, or concerning symptoms displays non-restrictive
   safety guidance.
@@ -295,10 +342,27 @@ Use a future target date for the main path.
 
 - [ ] Meals, goal/timeline, and lifestyle sections are visibly labeled by
   source: provided, calculated, or sent for generation.
+- [ ] Missing height returns to Step 5, highlights the selector, and states the
+  exact reason; it never collapses into a generic onboarding failure.
+- [ ] In controlled development failure cases, draft load/save and completion
+  blockers—including `EMAIL_VERIFICATION_REQUIRED`, `SESSION_EXPIRED`,
+  `LEGAL_ACCEPTANCE_REQUIRED`, `FOOD_SELECTION_CHANGED`,
+  `ONBOARDING_DATABASE_OUTDATED`, `ONBOARDING_SAVE_CONFLICT`,
+  `ONBOARDING_SAVE_TIMEOUT`, and a network outage—show their distinct safe code,
+  concrete reason, and relevant
+  edit/retry/login/restart action. Raw database or provider text is never shown.
+- [ ] Controlled plan-generation failures distinguish an incomplete profile,
+  ineligible or changed food, catalog/database incompatibility, provider
+  configuration/rate-limit/unavailability, persistence failure, and an in-flight
+  request. They preserve the completed profile and provide a safe next action.
 - [ ] The disclosure says passwords and raw OTP codes are never sent for plan
   generation.
 - [ ] Each **Edit** link returns to the correct step without losing data.
 - [ ] Completion is blocked until the confirmation box is selected.
+- [ ] While final profile saving is held pending, the confirmation checkbox,
+  Back, every **Edit** control, **Save and exit**, **Go to Today**, and
+  **Generate my plan** cannot start another action. Only one completion request
+  is sent, and a recoverable failure unlocks the appropriate controls.
 - [ ] **Go to Today** completes the profile without making generation a hidden
   requirement.
 - [ ] On the main path, **Generate my plan** saves the profile, creates a
@@ -315,16 +379,18 @@ Run these cases while Account A is authenticated and the full local stack is
 running. Keep the browser Network panel open. A provider response is
 source-reported data, not proof that the nutrition is correct.
 
-### Local catalog and rich nutrition
+### Unified saved and online search
 
 1. Search for a generic produce item such as `broccoli`.
 2. Open its **Nutrition facts** details.
-3. Search separately for a known brand, product name, variant, and GTIN after
-   creating or importing the product in the cases below.
+3. Enter `broccoli raw`, press the one explicit online-search action, and compare
+   the saved, USDA, and Open Food Facts results.
+4. Search separately for a known brand, product name, and flavor or variant,
+   such as `Optimum Nutrition double rich chocolate`.
 
 - [ ] Generic and branded results are visually distinct.
 - [ ] An exact product never collapses to a generic category such as
-  “protein powder”; brand, product, flavor/variant, and GTIN remain attached.
+  “protein powder”; brand, product, and flavor/variant remain attached.
 - [ ] The card states the reference quantity and basis, such as raw/cooked per
   100 g or one label serving.
 - [ ] Calories and available kilojoules, protein, carbohydrate, total fat,
@@ -338,20 +404,16 @@ source-reported data, not proof that the nutrition is correct.
 - [ ] Verification state, provider attribution, retrieval/source details, and a
   source link appear when the record supplies them.
 - [ ] Catalog paging/search does not expose another account's private product.
-
-### USDA FoodData Central text lookup
-
-1. Put `broccoli raw` in **Search foods**, choose
-   **Generic and branded foods — USDA**, and press **Search online by name**.
-2. Review several candidates before choosing one; in the Network response, note
-   the candidate's FDC `externalId` and visible data type.
-3. Choose **Import current record**, then search the local catalog for it.
-4. Import the same FDC identifier again.
-
+- [ ] The layout has no horizontal overflow or crushed one-word columns at 375,
+  768, 1280, or 1440 pixels, browser zoom 200%, or a split-window desktop width.
 - [ ] A one-character query is rejected without calling the provider.
 - [ ] Candidate search does not silently add every result to the database.
-- [ ] Import refetches the selected FDC record on the server and returns one
-  normalized catalog record with USDA attribution.
+- [ ] One submitted name query can return partial results when only one provider
+  is available, and clearly names the unavailable source.
+- [ ] Open Food Facts photos have useful alt text; a missing photo leaves a clean
+  text card rather than a broken image placeholder.
+- [ ] Import sends only provider plus external ID, refetches the selected record
+  on the server, and returns one normalized catalog record with attribution.
 - [ ] Editing the browser request to attach invented calories or nutrients does
   not control the saved values; import trusts the server-refetched provider
   record identified by provider plus external ID.
@@ -361,46 +423,20 @@ source-reported data, not proof that the nutrition is correct.
   disabled for generated-plan preferences.
 - [ ] Reimporting the same provider identifier reuses the existing record rather
   than creating a duplicate.
+- [ ] If the saved-food refresh fails before an import, the app reports
+  `SAVED_FOOD_SEARCH_FAILED`, keeps the current results visible, and retries only
+  the saved-food search.
+- [ ] If an external import succeeds but the following catalog refresh fails,
+  the app reports `FOOD_IMPORT_REFRESH_FAILED`, says the pending-review record
+  was already imported and was not added to the intended meal, and retries only
+  the refresh. It does not repeat the provider import or create a duplicate.
 - [ ] A missing key in production, provider timeout, bad response, or rate limit
   produces a useful unavailable/retry message and does not invent a result.
-
-### Open Food Facts product-name lookup
-
-1. Enter a brand, product, and flavor, such as
-   `Optimum Nutrition double rich chocolate`, in **Search foods**.
-2. Keep **Packaged products and brands — Open Food Facts** selected and press
-   **Search online by name**. A barcode is not required.
-3. Review the source, brand/product name, barcode when present, and the
-   source-reported calorie/macronutrient preview. Choose
-   **Import current record** only for the exact product you intend.
-4. Repeat the test while a saved local match is visible.
-
-- [ ] The online-name controls stay prominent even when the saved catalog has
-  matches.
-- [ ] Typing and local catalog filtering do not send a request to Open Food
-  Facts; only the explicit search button does.
-- [ ] Name search returns candidates without saving all of them.
-- [ ] Import sends only provider plus external ID and refetches the exact
-  barcode record from Open Food Facts before normalization; browser-supplied
-  nutrition cannot control the stored values.
 - [ ] Imported nutrition and provenance are labeled source-reported and
   `pending_review`, and the record remains unavailable to generated plans until
   catalog review.
 - [ ] Empty, one-character, unavailable, incomplete, and rate-limited searches
   show useful messages and never invent nutrition.
-
-### Open Food Facts barcode lookup
-
-1. Expand **Look up an exact barcode instead** and use the 8–14 digit barcode
-   from a non-sensitive packaged test product.
-2. If the provider finds it, review the exact brand/product and nutrition, then
-   import it and search the local catalog by that barcode.
-3. Also try seven digits, letters, an unknown 8–14 digit code, and a product
-   whose provider record lacks one of the four core values when available.
-
-- [ ] Invalid barcode format is rejected before a provider request.
-- [ ] A found product is normalized as the exact GTIN, shows Open Food Facts
-  attribution and source link, and remains `pending_review`.
 - [ ] Community-reported ingredients, allergens, and nutrition are not relabeled
   as independently reviewed.
 - [ ] Unknown or incomplete products offer the package-label path; they do not
@@ -410,25 +446,34 @@ source-reported data, not proof that the nutrition is correct.
 ## 7. Label photo, personal product, reuse, and privacy
 
 Use a clearly fake, non-sensitive test label that you can photograph. Give it a
-unique 8–14 digit test GTIN, record the exact values you print, and delete/reset
-the disposable local environment afterward.
+unique brand, product, flavor, package description, and nutrition panel; record
+the exact values you print and delete/reset the disposable local environment
+afterward.
 
 1. In **Settings → Private label foods**, enter brand, product, flavor/variant,
-   test GTIN, package and serving details, calories, protein, carbohydrate, fat,
+   package and serving details, calories, protein, carbohydrate, fat,
    several optional nutrients, ingredients, and an allergen statement.
 2. Choose a clear JPEG or PNG nutrition-label image. On a supported phone or
    tablet, also confirm the file control can offer the rear camera.
 3. Select the explicit package-allergen review, dietary-restriction review, and
-   exact-transcription confirmation, then choose **Upload and save product**.
-4. Refresh Settings and search for the product by brand, variant, and GTIN.
+   exact-transcription confirmation. First leave normalized sharing unselected;
+   then repeat with the separate sharing option selected.
+4. Confirm and save, refresh Settings, and search by the exact brand, product,
+   and variant.
 
 - [ ] Submission is blocked without a nutrition image, confirmation, required
   identity fields, four core nutrition values, ingredients, or allergen text.
+- [ ] While draft creation, photo upload, or final confirmation is held pending,
+  every editable label-form control is disabled, the form remains marked busy,
+  and a second submission cannot start. Controls recover after a retryable
+  failure.
 - [ ] If the package statement says `Contains milk and soy`, submission is
   blocked until both Milk and Soy are selected. A genuine `milk-free` claim
   does not itself create a Milk mapping.
-- [ ] A PDF, corrupt image, mismatched declared type, file over 8 MB, or image
-  over 20 megapixels is rejected without confirming a product.
+- [ ] A PDF, corrupt image, mismatched declared type, file over 8 MB, image
+  smaller than 480 by 480 pixels, image over 20 megapixels, or a nearly blank /
+  very low-contrast image is rejected with a concrete reason and without
+  confirming a product.
 - [ ] The server rotates/re-encodes the accepted JPEG/PNG, strips embedded
   metadata, and records dimensions and a digest rather than trusting the
   browser-provided filename.
@@ -442,27 +487,32 @@ the disposable local environment afterward.
   evidence—not the original upload as-is—is present. Studio is an administrative
   view; do not use its access as evidence of a browser/RLS leak.
 - [ ] The success message states that the personal copy is usable by Account A
-  and any barcode-keyed shared copy remains pending review.
+  and whether normalized pending-review facts were shared.
 - [ ] Account A's confirmed product shows the exact brand/product/variant,
   label-serving facts, ingredients/allergens, and **Confirmed from your label**.
 - [ ] The owner-private product is plan-eligible only for Account A after
   explicit confirmation; changing the photographed transcription during the
   confirmation request fails closed.
 - [ ] Refreshing and signing out/in preserve the confirmed product.
+- [ ] If confirmation succeeds but the current catalog refresh fails, the app
+  reports `PRIVATE_FOOD_REFRESH_FAILED`, says the private food and photo are
+  already saved, and retries only **Refresh saved foods**. It does not recreate
+  the draft, re-upload the photo, reconfirm, or create a duplicate.
 
 Now sign in as Account B in a separate private browser profile:
 
 - [ ] Account B cannot list Account A's label submission, personal product, raw
   image metadata, storage object, or private export data.
-- [ ] Searching the exact GTIN can find one normalized shared catalog record
-  without requiring Account B to upload the photo again.
+- [ ] With normalized sharing unselected, Account B cannot find a shared copy.
+- [ ] With normalized sharing selected, Account B can find one exact normalized
+  shared catalog record by brand/product/variant without uploading the photo.
 - [ ] That shared record contains normalized facts and source status only. It
   says `pending_review`, is searchable and can be logged in a Today snack, but
   cannot be selected for generated plans.
 - [ ] No raw label-photo URL, owner user ID, local storage path, cookie, or token
   appears in the shared card or browser response.
-- [ ] Submitting the same GTIN again does not create multiple shared catalog
-  identities.
+- [ ] Confirming equivalent text with case/spacing or numeric-format differences
+  does not create duplicate shared identities.
 
 ## 8. Profile, automatic time zone, shopping links, and tutorial
 
@@ -603,8 +653,9 @@ failure while preserving the accepted plan. Return to **Online** afterward.
 - [ ] Add a catalog food to each snack space. Adding a food marks that slot
   completed, does not invent a portion, and does not duplicate the same food.
 - [ ] Remove one recorded food; only that presence record is removed.
-- [ ] Search by an exact GTIN and add a reusable pending shared product to a
-  snack. Its source/review wording remains honest.
+- [ ] Search by the exact brand/product/variant of an opted-in reusable label
+  record and add the pending shared product to a snack. Its source/review
+  wording remains honest.
 - [ ] Marking or skipping a primary meal immediately updates the three-meal
   daily count, skipped count, and weekly context; recorded snacks are reported
   separately.
@@ -731,14 +782,14 @@ the previous history is restored. Return online afterward.
 
 ### Private label foods
 
-Complete every upload, confirmation, GTIN-reuse, invalid-image, and cross-user
+Complete every upload, confirmation, normalized-identity reuse, invalid-image, and cross-user
 case in section 7.
 
 - [ ] The saved list shows the confirmed personal product and its serving facts.
 - [ ] Returning to onboarding food search shows it to Account A as a
   user-confirmed, plan-eligible personal product.
-- [ ] The barcode-keyed shared copy, if created, is a separate pending-review
-  record and cannot enter generated plans.
+- [ ] The explicitly opted-in normalized shared copy, if created, is a separate
+  pending-review record and cannot enter generated plans.
 
 ### AI, security, and data
 
@@ -767,9 +818,19 @@ case in section 7.
 - [ ] Passwords shorter than 10 characters are rejected.
 - [ ] A valid new password produces a success message.
 - [ ] The old password no longer logs in; the new password does.
-- [ ] Reusing an invalid or expired callback link returns to login without
-  exposing provider details. The current Login page does not render the
-  callback's `message` query parameter.
+- [ ] Reusing an invalid or expired recovery link returns to Login with the safe
+  `RECOVERY_LINK_INVALID_OR_EXPIRED` reason and a link to request another reset;
+  no provider diagnostic is exposed.
+- [ ] In controlled callback cases, an incomplete link, an invalid/expired
+  verification link, and a temporary account-service failure display only the
+  allowlisted `AUTH_CALLBACK_INCOMPLETE`, `AUTH_LINK_INVALID_OR_EXPIRED`, and
+  `AUTH_CALLBACK_SERVICE_UNAVAILABLE` feedback with the matching safe action.
+- [ ] An arbitrary `message`, unknown `authError`, or provider diagnostic in the
+  callback URL is ignored and never rendered by Login.
+- [ ] A valid same-origin relative `next` destination is allowed. Absolute,
+  protocol-relative, backslash, control-character, and repeatedly encoded
+  cross-origin destinations stay on this application and use the safe Today or
+  password-reset fallback.
 
 This tests local Mailpit delivery only, not production SMTP deliverability.
 
@@ -784,8 +845,9 @@ a separate private/incognito profile.
 - [ ] Account B cannot see, edit, or delete Account A's weights.
 - [ ] Account B cannot see Account A's private label food, submission, sanitized
   photo/object path, or export.
-- [ ] Account B can see a catalog-owned `pending_review` normalized record keyed
-  by GTIN, but not its owner-private source image or personal-food identity.
+- [ ] Account B can see a catalog-owned `pending_review` normalized record only
+  when Account A selected sharing, but not its owner-private source image or
+  personal-food identity.
 - [ ] Account B cannot make that pending record plan-eligible, alter its review
   state, or insert it into a generated plan.
 - [ ] Account B's snack/skip rows and daily food items remain private from
@@ -797,7 +859,7 @@ In a signed-out terminal request, authenticated APIs must fail without a cookie:
 ```bash
 curl --include --request POST http://127.0.0.1:3000/api/foods/lookup \
   --header 'content-type: application/json' \
-  --data '{"action":"search_usda","query":"broccoli raw"}'
+  --data '{"action":"search","query":"broccoli raw"}'
 curl --include http://127.0.0.1:3000/api/food-labels
 ```
 
@@ -876,7 +938,7 @@ npm run bootstrap
 npm run doctor
 ```
 
-Expected: both bootstrap runs succeed, seeded foods and provider/GTIN identities
+Expected: both bootstrap runs succeed, seeded foods and provider/product identities
 are not duplicated, user data remains, and existing `.env.local` assignments
 including provider configuration are preserved. Restart with `npm run dev:all`.
 
@@ -962,8 +1024,9 @@ These are not test failures when the UI states them honestly:
 - Account deletion is visibly disabled pending a reviewed deletion/retention
   procedure.
 - A confirmed personal-label product can be used only by its owner and remains
-  labeled user-confirmed. A shared GTIN-normalized or external-provider record
-  stays `pending_review` and cannot enter generated plans until reviewed.
+  labeled user-confirmed. An explicitly shared normalized label identity or
+  external-provider record stays `pending_review` and cannot enter generated
+  plans until reviewed.
 - USDA's development `DEMO_KEY` is rate-limited; Open Food Facts is a live
   community source. Unavailable, incomplete, or rate-limited provider responses
   are expected error states, not permission to guess.
@@ -981,8 +1044,6 @@ These are not test failures when the UI states them honestly:
 - Local Mailpit authentication does not prove production email delivery.
 - Calendar's month grid is not available below 768 pixels; the selected-day
   editor remains visible.
-- An invalid auth callback safely returns to Login, but Login does not currently
-  display the callback message.
 
 ## 21. Production-container structure
 

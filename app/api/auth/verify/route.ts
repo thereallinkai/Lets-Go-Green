@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { apiError, apiSuccess } from "@/src/lib/api-response";
+import { apiError, apiSuccess, publicError } from "@/src/lib/api-response";
+import { classifyAuthError } from "@/src/lib/auth-error-taxonomy";
 import { isDevelopmentDemo } from "@/src/lib/env";
 import { createSupabaseServerClient } from "@/src/lib/supabase/server";
 
@@ -10,7 +11,13 @@ const schema = z.object({
 
 export async function POST(request: Request) {
   const parsed = schema.safeParse(await request.json().catch(() => null));
-  if (!parsed.success) return apiError("INVALID_CODE", "Enter a valid six-digit code.", 422);
+  if (!parsed.success) {
+    return apiError("INVALID_CODE", "Enter a valid six-digit code.", 422, {
+      details: "Use only the newest code sent to the registration email address.",
+      retryable: false,
+      action: { kind: "edit", label: "Enter the code" },
+    });
+  }
   if (isDevelopmentDemo()) {
     return parsed.data.token === "123456"
       ? apiSuccess({ verified: true, redirectTo: "/onboarding?step=3" })
@@ -25,7 +32,12 @@ export async function POST(request: Request) {
       type: "email",
     });
     if (error || !data.user) {
-      return apiError("INVALID_OR_EXPIRED_CODE", "That code is invalid or expired.", 400);
+      return publicError(
+        classifyAuthError(
+          error ?? { code: "invalid_credentials" },
+          "verify_email",
+        ),
+      );
     }
 
     const { error: profileError } = await supabase
@@ -34,10 +46,19 @@ export async function POST(request: Request) {
       .eq("user_id", data.user.id)
       .single();
     if (profileError) {
-      return apiError("PROFILE_SETUP_FAILED", "Email was verified, but profile setup needs to be retried.", 500);
+      return apiError(
+        "PROFILE_SETUP_FAILED",
+        "Email was verified, but the account profile was not created.",
+        500,
+        {
+          details: "Return to registration for a disposable test account, or contact the site administrator.",
+          retryable: false,
+          action: { kind: "navigate", label: "Return to registration", href: "/register" },
+        },
+      );
     }
     return apiSuccess({ verified: true, redirectTo: "/onboarding?step=3" });
-  } catch {
-    return apiError("AUTH_UNAVAILABLE", "Verification services are temporarily unavailable.", 503);
+  } catch (error) {
+    return publicError(classifyAuthError(error, "verify_email"));
   }
 }

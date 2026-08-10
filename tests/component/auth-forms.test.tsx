@@ -283,10 +283,15 @@ describe("authentication forms", () => {
     expect(JSON.parse(String(request.body))).not.toHaveProperty("age");
     await waitFor(() =>
       expect(router.push).toHaveBeenCalledWith(
-        "/onboarding?step=2&email=taylor%40example.com",
+        "/onboarding?step=2",
       ),
     );
     expect(window.sessionStorage.getItem(REGISTRATION_DRAFT_KEY)).toBeNull();
+    expect(
+      window.sessionStorage.getItem(
+        "lets-go-green-registration-email-handoff",
+      ),
+    ).toContain("taylor@example.com");
   });
 
   it("falls back to UTC when the device reports an invalid time zone", async () => {

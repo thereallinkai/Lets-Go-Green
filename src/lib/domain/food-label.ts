@@ -40,6 +40,7 @@ const foodLabelObjectSchema = z
     allergenSlugs: z.array(z.string().min(1).max(80)).max(50).default([]),
     restrictionSlugs: z.array(z.string().min(1).max(80)).max(50).default([]),
     sourceNote: z.string().trim().max(1_000).default(""),
+    shareNormalizedProduct: z.boolean().default(false),
     allergensReviewed: z.boolean(),
     restrictionsReviewed: z.boolean(),
     confirmedAccurate: z.boolean(),

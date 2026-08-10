@@ -1,4 +1,4 @@
-export const PLAN_PROMPT_VERSION = "lets-go-green-plan-v2";
+export const PLAN_PROMPT_VERSION = "lets-go-green-plan-v3";
 
 export const PLAN_SYSTEM_INSTRUCTIONS = `
 You arrange a seven-day general-wellness meal plan from an application-controlled
@@ -14,6 +14,8 @@ Hard boundaries:
 - If safetyRequiresNonRestrictivePlan is true, use planApproach "non_restrictive".
 - Return exactly seven days and exactly breakfast, lunch, and dinner for every day.
 - Keep portions within the provided bounds.
+- Treat profile height as context already incorporated into the app-calculated
+  energy range. Never infer a missing height or recalculate energy targets.
 - The application, not you, calculates nutrition totals, progress, dates, and trends.
 - Explain uncertainty and recommend qualified professional guidance when appropriate.
 `.trim();

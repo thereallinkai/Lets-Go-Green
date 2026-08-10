@@ -11,12 +11,21 @@ export type ExternalFoodCandidate = {
   variantName: string | null;
   gtin: string | null;
   dataType: string | null;
+  imageUrl: string | null;
+  nutritionImageUrl: string | null;
   nutritionPreview: {
     calories: number | null;
     proteinGrams: number | null;
     carbohydrateGrams: number | null;
     fatGrams: number | null;
   };
+};
+
+export type ExternalFoodProviderStatus = {
+  provider: ExternalFoodProvider;
+  status: "ok" | "unavailable" | "rate_limited";
+  resultCount: number;
+  message: string | null;
 };
 
 export type NormalizedExternalFood = {

@@ -11,6 +11,8 @@
   --line: #bfd4c2;
   --accent: #b8e36d;
   --accent-dark: #1f6b43;
+  --accent-pale: #e8f5dc;
+  --on-accent: #ffffff;
   --sage: #a9ceb0;
   --warning: #8a5d1f;
   --danger: #9b3d35;
@@ -678,6 +680,158 @@ img {
   background: var(--ink);
   color: white;
   padding: clamp(2rem, 5vw, 5rem);
+}
+
+.auth-aside-top,
+.onboarding-rail-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.onboarding-rail-top {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.appearance-control {
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.appearance-control > legend {
+  margin-bottom: 0.35rem;
+  padding: 0;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.appearance-description {
+  max-width: 620px;
+  margin: 0 0 1rem;
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+}
+
+.appearance-options {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.appearance-control-compact .appearance-options {
+  display: inline-flex;
+  gap: 0.18rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0.18rem;
+}
+
+.appearance-option {
+  position: relative;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.appearance-option > input {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.appearance-option > span {
+  min-height: 66px;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--paper-elevated) 78%, transparent);
+  padding: 0.75rem;
+  transition:
+    background-color var(--motion-base) ease,
+    border-color var(--motion-base) ease,
+    box-shadow var(--motion-base) ease,
+    color var(--motion-base) ease,
+    transform var(--motion-fast) var(--ease-out);
+}
+
+.appearance-option > input:checked + span {
+  border-color: var(--accent-dark);
+  background: color-mix(in srgb, var(--accent) 24%, var(--paper));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-dark) 52%, transparent);
+}
+
+.appearance-option > input:focus-visible + span {
+  outline: 3px solid #2f7d4e;
+  outline-offset: 3px;
+}
+
+.appearance-option-copy {
+  min-width: 0;
+  display: grid;
+  gap: 0.1rem;
+}
+
+.appearance-option-copy strong {
+  font-size: 0.83rem;
+}
+
+.appearance-option-copy small {
+  color: var(--ink-soft);
+  font-size: 0.7rem;
+}
+
+.appearance-control-compact .appearance-option > span {
+  width: 32px;
+  min-height: 32px;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  padding: 0;
+  color: currentColor;
+}
+
+.appearance-control-compact .appearance-option > input:checked + span {
+  background: var(--accent);
+  color: #102619;
+  box-shadow: 0 5px 14px rgba(7, 18, 12, 0.24);
+}
+
+.appearance-control-compact .appearance-option-copy {
+  display: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .appearance-option:hover > span {
+    border-color: var(--accent-dark);
+    transform: translateY(-1px);
+  }
+
+  .appearance-control-compact .appearance-option:hover > span {
+    background: rgba(255, 255, 255, 0.14);
+  }
+
+  .appearance-control-compact .appearance-option:hover > input:checked + span {
+    background: var(--accent);
+  }
+
+  .appearance-option:has(input:active) > span {
+    box-shadow:
+      0 0 0 4px var(--interaction-ring),
+      0 8px 22px rgba(18, 74, 44, 0.13);
+    transform: scale(1.025);
+  }
 }
 
 .auth-aside .brand-mark {
@@ -2533,7 +2687,7 @@ details.message-box[open] > summary {
   padding: 2rem 1.5rem;
 }
 
-.onboarding-rail .brand {
+.onboarding-rail-top {
   margin-bottom: 3.5rem;
 }
 
@@ -2579,6 +2733,7 @@ details.message-box[open] > summary {
 }
 
 .onboarding-main {
+  overflow-x: clip;
   padding: clamp(1.5rem, 6vw, 5rem);
 }
 
@@ -2598,6 +2753,41 @@ details.message-box[open] > summary {
   margin: 0 auto;
 }
 
+.onboarding-content-food {
+  width: min(1180px, 100%);
+}
+
+.onboarding-step-transition {
+  transform-origin: 50% 10%;
+  animation: onboarding-step-forward 420ms var(--ease-emphasized) both;
+}
+
+.onboarding-step-transition[data-direction="back"] {
+  animation-name: onboarding-step-back;
+}
+
+@keyframes onboarding-step-forward {
+  from {
+    clip-path: inset(0 0 0 5% round 18px);
+    transform: translate3d(18px, 7px, 0) scale(0.992);
+  }
+  to {
+    clip-path: inset(0 0 0 0 round 0);
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes onboarding-step-back {
+  from {
+    clip-path: inset(0 5% 0 0 round 18px);
+    transform: translate3d(-18px, 7px, 0) scale(0.992);
+  }
+  to {
+    clip-path: inset(0 0 0 0 round 0);
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
 .onboarding-content h1 {
   margin: 0;
   font-family: Georgia, serif;
@@ -2607,9 +2797,19 @@ details.message-box[open] > summary {
   line-height: 1.05;
 }
 
-.onboarding-content > p {
+.onboarding-step-transition > p {
   margin: 0.8rem 0 2.2rem;
   color: var(--ink-soft);
+}
+
+.onboarding-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.onboarding-height-field {
+  grid-column: 1 / -1;
 }
 
 .option-grid {
@@ -2675,8 +2875,9 @@ details.message-box[open] > summary {
 
 .food-picker {
   display: grid;
+  align-items: start;
   gap: 1rem;
-  grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.2fr);
+  grid-template-columns: minmax(0, 1.55fr) minmax(260px, 0.65fr);
 }
 
 .food-results {
@@ -2866,7 +3067,7 @@ details.message-box[open] > summary {
 
 :is(
   .auth-aside,
-  .onboarding-content,
+  .onboarding-step-transition,
   .today-primary,
   .today-side,
   .plan-overview,
@@ -3252,6 +3453,58 @@ button:disabled,
 
   .progress-summary {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .food-picker {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 1199px) {
+  .food-picker {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Give the tablet onboarding flow the full canvas instead of squeezing its
+   working area beside the desktop progress rail. */
+@media (max-width: 900px) {
+  .onboarding-shell {
+    display: block;
+  }
+
+  .onboarding-rail {
+    min-height: auto;
+    padding: 1rem;
+  }
+
+  .onboarding-rail .brand {
+    margin: 0;
+  }
+
+  .onboarding-rail-top {
+    align-items: center;
+    flex-direction: row;
+    margin-bottom: 0;
+  }
+
+  .step-list {
+    display: none;
+  }
+
+  .onboarding-main {
+    padding: 1.5rem clamp(1rem, 4vw, 2rem) 3rem;
+  }
+
+  .onboarding-header {
+    margin-bottom: 2rem;
+  }
+
+  .mobile-progress {
+    display: block;
+    color: var(--ink-soft);
+    font-size: 0.75rem;
+    font-weight: 750;
   }
 }
 
@@ -3652,6 +3905,12 @@ button:disabled,
     margin: 0;
   }
 
+  .onboarding-rail-top {
+    align-items: center;
+    flex-direction: row;
+    margin-bottom: 0;
+  }
+
   .step-list {
     display: none;
   }
@@ -3673,6 +3932,10 @@ button:disabled,
 
   .option-grid {
     grid-template-columns: 1fr;
+  }
+
+  .onboarding-field-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .onboarding-actions {
@@ -3820,6 +4083,405 @@ button:disabled,
   .summary-stat:hover {
     transform: none !important;
   }
+
+  .appearance-option:is(:hover, :active) > span,
+  .appearance-option:has(input:active) > span {
+    transform: none !important;
+  }
+}
+
+/* Appearance: the script in the document head resolves System before paint. */
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --ink: #f1f7f1;
+  --ink-soft: #b7c8bb;
+  --canvas: #07120c;
+  --paper: #0f1d14;
+  --paper-elevated: #14251a;
+  --surface: #1a3020;
+  --line: #36513e;
+  --accent: #b8e36d;
+  --accent-dark: #c9ef8b;
+  --accent-pale: #203823;
+  --on-accent: #102619;
+  --sage: #76a886;
+  --warning: #f0c975;
+  --danger: #ffaaa2;
+  --shadow-sm: 0 8px 24px rgba(0, 0, 0, 0.28);
+  --shadow: 0 20px 58px rgba(0, 0, 0, 0.34);
+  --shadow-raised: 0 24px 68px rgba(0, 0, 0, 0.44);
+  --interaction-ring: rgba(184, 227, 109, 0.34);
+}
+
+html[data-theme="dark"] body {
+  background:
+    radial-gradient(circle at 8% 0%, rgba(184, 227, 109, 0.1), transparent 28rem),
+    radial-gradient(circle at 92% 18%, rgba(100, 179, 116, 0.09), transparent 32rem),
+    var(--canvas);
+}
+
+html[data-theme="dark"] :focus-visible,
+html[data-theme="dark"] .appearance-option > input:focus-visible + span {
+  outline-color: #b8e36d;
+}
+
+html[data-theme="dark"] ::selection {
+  background: var(--accent);
+  color: #102619;
+}
+
+html[data-theme="dark"] :is(.brand-mark, .avatar, .tour-mark) {
+  color: #102619;
+}
+
+html[data-theme="dark"] :is(
+  .auth-aside,
+  .onboarding-rail,
+  .principles,
+  .trend-preview,
+  .day-status-card,
+  .range-card
+) {
+  background-color: #09170f;
+  color: #f5faf5;
+}
+
+html[data-theme="dark"] .auth-main {
+  background:
+    radial-gradient(circle at 85% 12%, rgba(184, 227, 109, 0.1), transparent 24rem),
+    transparent;
+}
+
+html[data-theme="dark"] :is(
+  .auth-quote small,
+  .auth-aside > small,
+  .step-item,
+  .principles li,
+  .trend-preview small,
+  .day-status-card p,
+  .range-card .card-title p,
+  .range-grid span
+) {
+  color: #b7c8bb;
+}
+
+html[data-theme="dark"] .step-item.active {
+  background: rgba(184, 227, 109, 0.12);
+  color: white;
+}
+
+html[data-theme="dark"] :is(
+  .step-item.active .step-number,
+  .step-item.complete .step-number
+) {
+  color: #102619;
+}
+
+html[data-theme="dark"] .landing-header {
+  border-bottom-color: rgba(184, 227, 109, 0.2);
+}
+
+html[data-theme="dark"] :is(.eyebrow, .preview-kicker, .source-label.ai) {
+  color: #c9ef8b;
+}
+
+html[data-theme="dark"] :is(
+  .microcopy,
+  .preview-progress-copy span,
+  .trend-preview span,
+  .mini-meal > span,
+  .mini-meal small,
+  .benefit-number,
+  .landing-footer p,
+  .field-help,
+  .date-label,
+  .card-title p,
+  .meal-row span,
+  .metric span,
+  .chart-alt,
+  .source-label,
+  .plan-meal-card > p,
+  .food-line span,
+  .food-line small,
+  .weekday,
+  .completion-copy,
+  .selected-day-panel > p,
+  .summary-stat span,
+  .history-row span,
+  .settings-index a,
+  .profile-chip small,
+  .mobile-progress
+) {
+  color: #aebfb3;
+}
+
+html[data-theme="dark"] :is(.status-chip, .badge) {
+  background: #213a28;
+  color: #dcedd9;
+}
+
+html[data-theme="dark"] .progress-track {
+  background: #2a4933;
+}
+
+html[data-theme="dark"] .progress-track span {
+  background: var(--accent);
+}
+
+html[data-theme="dark"] :is(.product-preview, .card, .meal-row, .plan-meal-card) {
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
+}
+
+html[data-theme="dark"] :is(.button-dark, .ui-button-default, .ui-button-accent) {
+  background: var(--accent);
+  color: #102619;
+}
+
+html[data-theme="dark"] .ui-button-outline {
+  border-color: #577060;
+  background: rgba(20, 37, 26, 0.7);
+  color: #eff7f0;
+}
+
+html[data-theme="dark"] .ui-button-outline:hover {
+  border-color: #8eb297;
+  background: #1a3020;
+}
+
+html[data-theme="dark"] .ui-button-danger {
+  border-color: rgba(255, 170, 162, 0.42);
+  background: #321b1b;
+  color: #ffaaa2;
+}
+
+html[data-theme="dark"] .button-dark:hover {
+  background: #c8ee82;
+  box-shadow: 0 9px 26px rgba(184, 227, 109, 0.18);
+}
+
+html[data-theme="dark"] .button-accent {
+  color: #102619;
+}
+
+html[data-theme="dark"] .button-quiet:hover {
+  background: rgba(184, 227, 109, 0.1);
+}
+
+html[data-theme="dark"] :is(.form-row a, .auth-switch a) {
+  color: var(--accent-dark);
+}
+
+html[data-theme="dark"] .button-danger {
+  border-color: rgba(255, 170, 162, 0.42);
+  background: #321b1b;
+}
+
+html[data-theme="dark"] :is(
+  .field input,
+  .field select,
+  .field textarea,
+  .input,
+  .otp-grid input
+) {
+  border-color: var(--line);
+  background: #122319;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.025);
+}
+
+html[data-theme="dark"] :is(
+  .field input:focus,
+  .field select:focus,
+  .field textarea:focus,
+  .input:focus
+) {
+  border-color: #9fd067;
+  background: #172b1e;
+  box-shadow: 0 0 0 3px rgba(184, 227, 109, 0.16);
+}
+
+html[data-theme="dark"] :is(
+  .field input:hover:not(:disabled),
+  .field select:hover:not(:disabled),
+  .field textarea:hover:not(:disabled)
+) {
+  border-color: #71927a;
+}
+
+html[data-theme="dark"] .message-box {
+  border-color: #7f6835;
+  background: #2b2515;
+  color: #f2dca2;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
+}
+
+html[data-theme="dark"] .message-box.error {
+  border-color: #844c47;
+  background: #301b1b;
+  color: #ffc0b9;
+}
+
+html[data-theme="dark"] .meal-dropzone {
+  border-color: #4c6654;
+  background: #102017;
+}
+
+html[data-theme="dark"] .loading-bars i {
+  background: linear-gradient(100deg, #294331 20%, #385a41 42%, #294331 64%);
+  background-size: 220% 100%;
+}
+
+html[data-theme="dark"] .sidebar {
+  background:
+    linear-gradient(180deg, rgba(184, 227, 109, 0.045), transparent 45%),
+    #0b1a11;
+  box-shadow: 10px 0 30px rgba(0, 0, 0, 0.2);
+}
+
+html[data-theme="dark"] .nav-link {
+  color: #b9cabe;
+}
+
+html[data-theme="dark"] .nav-link:hover {
+  background: rgba(184, 227, 109, 0.09);
+  color: white;
+}
+
+html[data-theme="dark"] :is(.nav-link.active, .day-tab.active) {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #102619;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28);
+}
+
+html[data-theme="dark"] :is(.profile-chip:hover, .profile-chip.active) {
+  border-color: rgba(184, 227, 109, 0.25);
+  background: rgba(184, 227, 109, 0.08);
+}
+
+html[data-theme="dark"] .profile-chip.active {
+  box-shadow: inset 3px 0 var(--accent);
+}
+
+html[data-theme="dark"] .meal-icon {
+  background: #253c28;
+  color: #d1ed9c;
+}
+
+html[data-theme="dark"] .check-button {
+  border-color: #577060;
+  background: #14251a;
+}
+
+html[data-theme="dark"] .check-button.complete {
+  border-color: #8db060;
+  background: #263c24;
+  color: #d8efb4;
+}
+
+html[data-theme="dark"] .plan-notice {
+  border-color: #65753d;
+  background: #252d18;
+  color: #dbe8ad;
+}
+
+html[data-theme="dark"] .day-tab:hover:not(.active) {
+  border-color: #71927a;
+  background: #182a1d;
+}
+
+html[data-theme="dark"] :is(.basis-badge, .disclaimer) {
+  background: #202d21;
+  color: #bfcfc2;
+}
+
+html[data-theme="dark"] .calendar-toolbar {
+  background: rgba(15, 29, 20, 0.92);
+}
+
+html[data-theme="dark"] .calendar-day {
+  background: #102017;
+}
+
+html[data-theme="dark"] :is(.calendar-day:hover, .calendar-day.selected) {
+  background: #253724;
+}
+
+html[data-theme="dark"] .calendar-day.outside {
+  background: #0b170f;
+  color: #718078;
+}
+
+html[data-theme="dark"] .history-row:hover {
+  background: rgba(184, 227, 109, 0.065);
+}
+
+html[data-theme="dark"] .settings-index a:hover {
+  background: rgba(184, 227, 109, 0.09);
+  color: white;
+}
+
+html[data-theme="dark"] .release-overview {
+  border-color: rgba(184, 227, 109, 0.2);
+  background: rgba(7, 18, 12, 0.46);
+}
+
+html[data-theme="dark"] .profile-hero {
+  border-color: rgba(184, 227, 109, 0.22);
+  background:
+    radial-gradient(circle at 92% 10%, rgba(184, 227, 109, 0.16), transparent 18rem),
+    linear-gradient(135deg, #13251a, #0c1a11);
+}
+
+html[data-theme="dark"] .shopping-links a {
+  background: rgba(20, 37, 26, 0.78);
+}
+
+html[data-theme="dark"] .shopping-links a:hover {
+  background: #1a3020;
+}
+
+html[data-theme="dark"] :is(.tour-detail, .option-card) {
+  background: #17291c;
+}
+
+html[data-theme="dark"] .tour-progress span {
+  background: #36513e;
+}
+
+html[data-theme="dark"] .tour-progress span.complete {
+  background: var(--accent);
+}
+
+html[data-theme="dark"] .option-card {
+  border-color: #4c6654;
+}
+
+html[data-theme="dark"] .option-card:has(input:checked) {
+  border-color: var(--accent);
+  background: #263b25;
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+html[data-theme="dark"] :is(.mobile-app-header, .mobile-nav) {
+  background: rgba(7, 18, 12, 0.94);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3);
+}
+
+html[data-theme="dark"] .mobile-profile-link:hover {
+  background: rgba(184, 227, 109, 0.1);
+}
+
+html[data-theme="dark"] .mobile-nav .nav-link.active {
+  background: rgba(184, 227, 109, 0.14);
+  color: var(--accent);
+}
+
+html[data-theme="dark"] .appearance-control-full .appearance-option > span {
+  background: rgba(20, 37, 26, 0.82);
+}
+
+html[data-theme="dark"] .appearance-control-full .appearance-option > input:checked + span {
+  background: #293d26;
 }
 
 @media (forced-colors: active) {
@@ -3837,5 +4499,9 @@ button:disabled,
   .meal-dots i.complete {
     border-color: Highlight;
     background: Highlight;
+  }
+
+  .appearance-option > input:checked + span {
+    border: 2px solid Highlight;
   }
 }

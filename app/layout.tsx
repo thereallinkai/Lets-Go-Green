@@ -1,5 +1,9 @@
 import type { Metadata, Viewport } from "next";
 import { BRAND } from "@/src/lib/brand";
+import {
+  APPEARANCE_BOOTSTRAP_SCRIPT,
+  LIGHT_THEME_COLOR,
+} from "@/src/lib/appearance";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -41,12 +45,16 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#edf7ee",
+  colorScheme: "light dark",
+  themeColor: LIGHT_THEME_COLOR,
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" data-scroll-behavior="smooth">
+    <html lang="en" data-scroll-behavior="smooth" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: APPEARANCE_BOOTSTRAP_SCRIPT }} />
+      </head>
       <body>
         <a className="skip-link" href="#main-content">
           Skip to main content

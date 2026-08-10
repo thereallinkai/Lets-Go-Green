@@ -3,7 +3,12 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import * as Dialog from "@radix-ui/react-dialog";
-import { AlertCircle, LoaderCircle } from "lucide-react";
+import { LoaderCircle } from "lucide-react";
+import type { ApiError } from "@/src/lib/api-response";
+import {
+  apiErrorFromPayload,
+  clientApiError,
+} from "@/src/lib/client-api-error";
 import {
   calculateAgeOnDate,
   MAXIMUM_REGISTRATION_AGE,
@@ -15,6 +20,12 @@ import {
   validateRegistrationDateOfBirth,
 } from "@/src/lib/domain";
 import { PasswordField } from "./password-field";
+import { ApiErrorNotice } from "./api-error-notice";
+import { useClientReady } from "@/src/lib/client-ready";
+import {
+  createRegistrationEmailHandoff,
+  REGISTRATION_EMAIL_HANDOFF_KEY,
+} from "@/src/lib/registration-email-handoff";
 
 type RegistrationField =
   | "fullName"
@@ -166,17 +177,38 @@ function readableDate(dateOfBirth: string) {
   }).format(new Date(Date.UTC(year, month - 1, day)));
 }
 
+function apiErrorMatchesRegistrationField(
+  error: ApiError,
+  field: RegistrationField,
+) {
+  switch (error.code) {
+    case "INVALID_EMAIL":
+    case "EMAIL_ALREADY_REGISTERED":
+      return field === "email";
+    case "WEAK_PASSWORD":
+    case "PASSWORD_COMPROMISED":
+      return field === "password";
+    case "INVALID_DATE_OF_BIRTH":
+      return field === "dateOfBirth";
+    case "REGISTRATION_CONSENT_REQUIRED":
+      return field === "terms" || field === "privacy";
+    default:
+      return false;
+  }
+}
+
 export function RegisterForm() {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
   const errorSummaryRef = useRef<HTMLDivElement>(null);
   const createAccountButtonRef = useRef<HTMLButtonElement>(null);
   const cancelConfirmationRef = useRef<HTMLButtonElement>(null);
-  const [error, setError] = useState("");
+  const [apiError, setApiError] = useState<ApiError | null>(null);
   const [fieldErrors, setFieldErrors] = useState<RegistrationErrors>({});
   const [pending, setPending] = useState(false);
   const [ageConfirmation, setAgeConfirmation] =
     useState<AgeConfirmation | null>(null);
+  const clientReady = useClientReady();
   const timeZone = useSyncExternalStore(
     subscribeToDeviceTimeZone,
     resolveDeviceTimeZone,
@@ -241,7 +273,7 @@ export function RegisterForm() {
     const passwordConfirmation = String(
       form.get("passwordConfirmation") ?? "",
     );
-    setError("");
+    setApiError(null);
     const validationErrors: RegistrationErrors = {};
     const fullName = String(form.get("fullName") ?? "").trim();
     const gender = String(form.get("gender") ?? "");
@@ -332,7 +364,7 @@ export function RegisterForm() {
     );
     if (!currentDateOfBirth.valid) {
       setAgeConfirmation(null);
-      setError("");
+      setApiError(null);
       setFieldErrors({
         dateOfBirth:
           dateOfBirthError(
@@ -377,16 +409,43 @@ export function RegisterForm() {
           privacyAccepted: form.get("privacy") === "on",
         }),
       });
-      const result = (await response.json()) as {
-        data: { email?: string } | null;
-        error: { message: string } | null;
-      };
-      if (!response.ok || result.error) {
+      const result = (await response.json().catch(() => null)) as {
+        data?: { email?: string } | null;
+        error?: unknown;
+      } | null;
+      if (!response.ok || result?.error || !result?.data) {
         setAgeConfirmation(null);
-        setError(
-          result.error?.message ??
-            "We could not create the account. Review the form and try again.",
+        const publicError = apiErrorFromPayload(
+          result,
+          clientApiError(
+            "REGISTRATION_RESPONSE_INVALID",
+            "The account could not be created.",
+            "The account service returned an unreadable response. Your form information is unchanged; wait briefly and try again.",
+            {
+              retryable: true,
+              action: { kind: "retry", label: "Try again" },
+            },
+          ),
         );
+        setApiError(publicError);
+        if (
+          publicError.code === "INVALID_EMAIL" ||
+          publicError.code === "EMAIL_ALREADY_REGISTERED"
+        ) {
+          setFieldErrors({ email: publicError.message });
+        } else if (
+          publicError.code === "WEAK_PASSWORD" ||
+          publicError.code === "PASSWORD_COMPROMISED"
+        ) {
+          setFieldErrors({ password: publicError.message });
+        } else if (publicError.code === "INVALID_DATE_OF_BIRTH") {
+          setFieldErrors({ dateOfBirth: publicError.message });
+        } else if (publicError.code === "REGISTRATION_CONSENT_REQUIRED") {
+          setFieldErrors({
+            terms: publicError.message,
+            privacy: publicError.message,
+          });
+        }
         window.requestAnimationFrame(() => errorSummaryRef.current?.focus());
         return;
       }
@@ -399,11 +458,29 @@ export function RegisterForm() {
         browserStorage("localStorage"),
         LEGACY_REGISTRATION_DRAFT_KEY,
       );
-      const email = result.data?.email ?? String(form.get("email") ?? "");
-      router.push(`/onboarding?step=2&email=${encodeURIComponent(email)}`);
+      const email = result.data.email ?? String(form.get("email") ?? "");
+      const emailHandoff = createRegistrationEmailHandoff(email);
+      if (emailHandoff) {
+        writeStorage(
+          browserStorage("sessionStorage"),
+          REGISTRATION_EMAIL_HANDOFF_KEY,
+          emailHandoff,
+        );
+      }
+      router.push("/onboarding?step=2");
     } catch {
       setAgeConfirmation(null);
-      setError("The service is temporarily unavailable. Please try again.");
+      setApiError(
+        clientApiError(
+          "REGISTRATION_NETWORK_ERROR",
+          "The account service could not be reached.",
+          "Check your connection and try again. Your form information is unchanged.",
+          {
+            retryable: true,
+            action: { kind: "retry", label: "Try again" },
+          },
+        ),
+      );
       window.requestAnimationFrame(() => errorSummaryRef.current?.focus());
     } finally {
       setPending(false);
@@ -412,7 +489,9 @@ export function RegisterForm() {
 
   return (
     <form
+      action="/register"
       className="form-stack"
+      method="post"
       ref={formRef}
       onChange={(event) => {
         saveSafeDraft(event.currentTarget);
@@ -426,7 +505,11 @@ export function RegisterForm() {
           return;
         }
         const field = changedControl.name as RegistrationField;
-        setError("");
+        setApiError((current) =>
+          current && apiErrorMatchesRegistrationField(current, field)
+            ? null
+            : current,
+        );
         setFieldErrors((current) => {
           if (!current[field]) return current;
           const next = { ...current };
@@ -437,20 +520,76 @@ export function RegisterForm() {
       onSubmit={onSubmit}
       noValidate
     >
-      {error || Object.keys(fieldErrors).length > 0 ? (
+      {apiError ? (
+        <ApiErrorNotice
+          actionDisabled={pending}
+          error={apiError}
+          onAction={
+            apiError.action?.kind === "retry" ||
+            apiError.action?.kind === "edit"
+              ? () => {
+                  if (apiError.code === "CAPTCHA_FAILED") {
+                    window.location.reload();
+                    return;
+                  }
+                  if (
+                    apiError.code === "INVALID_EMAIL" ||
+                    apiError.code === "EMAIL_ALREADY_REGISTERED"
+                  ) {
+                    formRef.current
+                      ?.querySelector<HTMLInputElement>("#register-email")
+                      ?.focus();
+                    return;
+                  }
+                  if (
+                    apiError.code === "WEAK_PASSWORD" ||
+                    apiError.code === "PASSWORD_COMPROMISED"
+                  ) {
+                    formRef.current
+                      ?.querySelector<HTMLInputElement>("#register-password")
+                      ?.focus();
+                    return;
+                  }
+                  if (apiError.code === "INVALID_DATE_OF_BIRTH") {
+                    formRef.current
+                      ?.querySelector<HTMLInputElement>("#date-of-birth")
+                      ?.focus();
+                    return;
+                  }
+                  if (apiError.code === "REGISTRATION_CONSENT_REQUIRED") {
+                    formRef.current
+                      ?.querySelector<HTMLInputElement>('input[name="terms"]')
+                      ?.focus();
+                    return;
+                  }
+                  if (
+                    apiError.action?.kind === "edit" ||
+                    apiError.code === "INVALID_REGISTRATION"
+                  ) {
+                    formRef.current
+                      ?.querySelector<HTMLInputElement>("#full-name")
+                      ?.focus();
+                    return;
+                  }
+                  formRef.current?.requestSubmit();
+                }
+              : undefined
+          }
+          ref={errorSummaryRef}
+        />
+      ) : Object.keys(fieldErrors).length > 0 ? (
         <div
           className="message-box error"
           ref={errorSummaryRef}
           role="alert"
           tabIndex={-1}
         >
-          <AlertCircle size={18} aria-hidden="true" />
           <div>
-            <strong>{error || "Please review your account details."}</strong>
+            <strong>Please review your account details.</strong>
             {Object.keys(fieldErrors).length > 0 ? (
               <ul style={{ margin: ".35rem 0 0", paddingLeft: "1.2rem" }}>
-                {Object.values(fieldErrors).map((message) => (
-                  <li key={message}>{message}</li>
+                {Object.entries(fieldErrors).map(([field, message]) => (
+                  <li key={field}>{message}</li>
                 ))}
               </ul>
             ) : null}
@@ -609,7 +748,7 @@ export function RegisterForm() {
       <button
         aria-haspopup="dialog"
         className="button button-dark form-submit"
-        disabled={pending}
+        disabled={!clientReady || pending}
         ref={createAccountButtonRef}
         type="submit"
       >

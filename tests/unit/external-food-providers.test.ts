@@ -89,6 +89,8 @@ describe("external food normalization", () => {
       externalId: "748927022650",
       brandName: "Optimum Nutrition",
       gtin: "748927022650",
+      imageUrl: null,
+      nutritionImageUrl: null,
       nutritionPreview: {
         calories: 375,
         proteinGrams: 75,
@@ -97,6 +99,46 @@ describe("external food normalization", () => {
       },
     });
     expect(candidates[1]?.nutritionPreview.calories).toBeCloseTo(375, 0);
+  });
+
+  it("keeps only HTTPS Open Food Facts package-photo URLs", async () => {
+    const product = {
+      code: "1234567890123",
+      product_name: "Chocolate protein powder",
+      brands: "Example Brand",
+      image_front_small_url:
+        "https://images.openfoodfacts.org/images/products/123/front.200.jpg",
+      image_nutrition_small_url:
+        "https://images.openfoodfacts.org/images/products/123/nutrition.200.jpg",
+      nutriments: {
+        "energy-kcal_100g": 380,
+        proteins_100g: 72,
+        carbohydrates_100g: 12,
+        fat_100g: 4,
+      },
+    };
+    const trusted = await searchOpenFoodFactsProducts("chocolate protein", {
+      userAgent: "LetsGoGreen tests@example.invalid",
+      fetcher: fixtureFetch({ products: [product] }),
+    });
+    expect(trusted[0]?.imageUrl).toBe(product.image_front_small_url);
+    expect(trusted[0]?.nutritionImageUrl).toBe(
+      product.image_nutrition_small_url,
+    );
+
+    const untrusted = await searchOpenFoodFactsProducts("chocolate protein", {
+      userAgent: "LetsGoGreen tests@example.invalid",
+      fetcher: fixtureFetch({
+        products: [
+          {
+            ...product,
+            code: "1234567890124",
+            image_front_small_url: "https://tracker.example.invalid/front.jpg",
+          },
+        ],
+      }),
+    });
+    expect(untrusted[0]?.imageUrl).toBeNull();
   });
 
   it("keeps USDA kilocalorie and kilojoule rows distinct", async () => {

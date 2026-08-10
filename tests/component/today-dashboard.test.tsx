@@ -239,8 +239,9 @@ describe("TodayDashboard meal completion", () => {
       },
     );
     expect(mealRow("Morning snack")).toHaveTextContent(
-      "Double Rich Chocolate · barcode 748927022650",
+      "Double Rich Chocolate",
     );
+    expect(mealRow("Morning snack")).not.toHaveTextContent(/barcode/i);
     expect(mealRow("Morning snack")).toHaveTextContent(
       "Pending catalog review",
     );

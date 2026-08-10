@@ -39,6 +39,20 @@ type RpcResult = {
   error: { code?: string; message?: string } | null;
 };
 
+function authServiceUnavailable() {
+  return apiError(
+    "AUTH_SERVICE_UNAVAILABLE",
+    "Your account session could not be checked right now.",
+    503,
+    {
+      details:
+        "The catalog was not searched because the account service was unavailable. Check the connection and try again.",
+      retryable: true,
+      action: { kind: "retry", label: "Try search again" },
+    },
+  );
+}
+
 export async function GET(request: Request) {
   const params = Object.fromEntries(new URL(request.url).searchParams);
   const parsed = querySchema.safeParse(params);
@@ -47,6 +61,12 @@ export async function GET(request: Request) {
       "INVALID_FOOD_SEARCH",
       "Use a search of at most 120 characters and a page size from 1 to 100.",
       422,
+      {
+        details:
+          "Shorten the search or choose a supported page size before trying again.",
+        retryable: false,
+        action: { kind: "edit", label: "Edit food search" },
+      },
     );
   }
   const { q, limit, offset } = parsed.data;
@@ -62,13 +82,28 @@ export async function GET(request: Request) {
     return response;
   }
 
+  let supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>;
+  let userId: string | null;
   try {
-    const supabase = await createSupabaseServerClient();
-    const { data: auth } = await supabase.auth.getUser();
-    if (!auth.user) {
-      return apiError("SESSION_EXPIRED", "Log in to view the food catalog.", 401);
+    supabase = await createSupabaseServerClient();
+    const authResult = await supabase.auth.getUser();
+    userId = authResult.data.user?.id ?? null;
+    const authError = authResult.error;
+    if (authError) {
+      return authServiceUnavailable();
     }
+  } catch {
+    return authServiceUnavailable();
+  }
+  if (!userId) {
+    return apiError("SESSION_EXPIRED", "Log in to view the food catalog.", 401, {
+      details: "The app could not find an active account session.",
+      retryable: false,
+      action: { kind: "navigate", label: "Log in", href: "/login" },
+    });
+  }
 
+  try {
     const callSearch = supabase.rpc.bind(supabase) as unknown as (
       name: string,
       args: Record<string, unknown>,
@@ -83,7 +118,13 @@ export async function GET(request: Request) {
       return apiError(
         "FOODS_LOAD_FAILED",
         "The food catalog could not be loaded.",
-        500,
+        503,
+        {
+          details:
+            "The saved catalog search did not finish. No food preferences were changed.",
+          retryable: true,
+          action: { kind: "retry", label: "Try search again" },
+        },
       );
     }
 
@@ -108,6 +149,12 @@ export async function GET(request: Request) {
       "SERVICE_UNAVAILABLE",
       "Food catalog services are temporarily unavailable.",
       503,
+      {
+        details:
+          "The catalog could not be reached. No food preferences were changed; check the connection and try again.",
+        retryable: true,
+        action: { kind: "retry", label: "Try search again" },
+      },
     );
   }
 }

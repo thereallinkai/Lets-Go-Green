@@ -137,6 +137,8 @@ export async function searchUsdaFoods(
         variantName: null,
         gtin: digitsOnly(food.gtinUpc),
         dataType: text(food.dataType),
+        imageUrl: null,
+        nutritionImageUrl: null,
         nutritionPreview: nutrientPreview(food),
       },
     ];

@@ -30,12 +30,20 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
+import type { ApiError } from "@/src/lib/api-response";
+import {
+  apiErrorFromPayload,
+  clientApiError,
+} from "@/src/lib/client-api-error";
 import { DEMO_CATALOG } from "@/src/lib/demo-catalog";
 import {
   normalizeMealFoodSlugs,
   parseOptionalHeight,
 } from "@/src/lib/onboarding-input";
 import { BrandLink } from "@/components/brand-link";
+import { AppearanceControl } from "@/components/appearance-control";
+import { HeightPicker } from "@/components/height-picker";
+import { ApiErrorNotice } from "@/components/api-error-notice";
 import { BRAND } from "@/src/lib/brand";
 import {
   FoodSearchPicker,
@@ -45,6 +53,11 @@ import type {
   FoodNutritionFacts,
   FoodSourceSummary,
 } from "@/src/lib/domain/food-catalog";
+import {
+  normalizeRegistrationEmail,
+  readRegistrationEmailHandoff,
+  REGISTRATION_EMAIL_HANDOFF_KEY,
+} from "@/src/lib/registration-email-handoff";
 
 type Meal = "breakfast" | "lunch" | "dinner";
 type Unit = "kg" | "lb";
@@ -59,12 +72,81 @@ type PageError = {
   message: string;
 };
 
+type DraftPersistenceIssue = {
+  operation: "load" | "save";
+  error: ApiError;
+};
+
+type OnboardingFocusTarget = {
+  step: 2 | 3 | 4 | 5 | 6;
+  field: string;
+  selector: string;
+};
+
 type Food = FoodPickerItem;
 
-const ONBOARDING_DRAFT_KEY = "lets-go-green-onboarding-draft";
+const ONBOARDING_DRAFT_KEY_PREFIX = "lets-go-green-onboarding-draft";
+const UNSCOPED_ONBOARDING_DRAFT_KEY = "lets-go-green-onboarding-draft";
 const LEGACY_ONBOARDING_DRAFT_KEY = "cutting-plan-onboarding-draft";
 const REGISTRATION_DRAFT_KEY = "lets-go-green-registration-draft";
 const LEGACY_REGISTRATION_DRAFT_KEY = "cutting-plan-registration-draft";
+
+const GOAL_TYPES = new Set([
+  "fat_loss",
+  "muscle_gain",
+  "maintenance",
+  "recomposition",
+]);
+const ACTIVITY_LEVELS = new Set(["low", "light", "moderate", "high"]);
+const MEALS = ["breakfast", "lunch", "dinner"] as const;
+const WARNING_CODES = new Set([
+  "missing_carbohydrate",
+  "missing_protein",
+  "missing_vegetable",
+]);
+
+function browserStorage(kind: "localStorage" | "sessionStorage") {
+  try {
+    return window[kind];
+  } catch {
+    return null;
+  }
+}
+
+function readStorage(storage: Storage | null, key: string) {
+  try {
+    return storage?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStorage(storage: Storage | null, key: string, value: string) {
+  try {
+    storage?.setItem(key, value);
+    return storage !== null;
+  } catch {
+    return false;
+  }
+}
+
+function removeStorage(storage: Storage | null, key: string) {
+  try {
+    storage?.removeItem(key);
+  } catch {
+    // Account persistence still works when browser storage is unavailable.
+  }
+}
+
+function scopedOnboardingDraftKey(ownerKey: string | null | undefined) {
+  if (
+    typeof ownerKey !== "string" ||
+    !/^[A-Za-z0-9_-]{1,128}$/.test(ownerKey)
+  ) {
+    return null;
+  }
+  return `${ONBOARDING_DRAFT_KEY_PREFIX}:${ownerKey}`;
+}
 
 type Draft = {
   meals: Record<Meal, string[]>;
@@ -82,6 +164,12 @@ type Draft = {
   safety: string[];
   notes: string;
   acknowledgedWarnings: AcknowledgedWarning[];
+};
+
+type StoredDraft = {
+  draft: Partial<Draft>;
+  savedAt: number;
+  currentStep: number | null;
 };
 
 const fallbackFoods: Food[] = DEMO_CATALOG.map((food) => ({
@@ -110,11 +198,16 @@ const initialDraft: Draft = {
 };
 
 type ApiFailure = {
-  error?: {
-    code?: string;
-    message?: string;
-  } | null;
+  error?: ApiError | null;
 };
+
+type OnboardingErrorContext =
+  | "verify"
+  | "resend"
+  | "save-draft"
+  | "complete-today"
+  | "complete-generate"
+  | "generate";
 
 type PlanGenerationResult = ApiFailure & {
   data?: {
@@ -124,21 +217,127 @@ type PlanGenerationResult = ApiFailure & {
 };
 
 function normalizeRestoredDraft(value: unknown): Partial<Draft> {
-  if (!value || typeof value !== "object") return {};
-  const restored = value as Partial<Draft>;
-  if (!restored.meals || typeof restored.meals !== "object") return restored;
-  const meals = restored.meals as unknown as Record<string, unknown>;
-  const normalizedMeals = (["breakfast", "lunch", "dinner"] as const).reduce(
-    (result, meal) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const restored = value as Record<string, unknown>;
+  const normalized: Partial<Draft> = {};
+  const text = (key: string, maximumLength: number) =>
+    typeof restored[key] === "string"
+      ? restored[key].slice(0, maximumLength)
+      : undefined;
+
+  if (
+    restored.meals &&
+    typeof restored.meals === "object" &&
+    !Array.isArray(restored.meals)
+  ) {
+    const meals = restored.meals as Record<string, unknown>;
+    normalized.meals = MEALS.reduce((result, meal) => {
       const slugs = Array.isArray(meals[meal])
-        ? meals[meal].filter((slug): slug is string => typeof slug === "string")
+        ? meals[meal]
+            .filter((slug): slug is string => typeof slug === "string")
+            .map((slug) => slug.trim())
+            .filter((slug) => slug.length > 0 && slug.length <= 120)
+            .slice(0, 50)
         : [];
       result[meal] = normalizeMealFoodSlugs(slugs);
       return result;
-    },
-    {} as Draft["meals"],
-  );
-  return { ...restored, meals: normalizedMeals };
+    }, {} as Draft["meals"]);
+  }
+
+  const currentWeight = text("currentWeight", 30);
+  const targetWeight = text("targetWeight", 30);
+  const targetDate = text("targetDate", 10);
+  const height = text("height", 30);
+  const trainingDays = text("trainingDays", 2);
+  const restrictions = text("restrictions", 1_000);
+  const allergies = text("allergies", 1_000);
+  const timeZone = text("timeZone", 100);
+  const notes = text("notes", 2_000);
+  if (currentWeight !== undefined) normalized.currentWeight = currentWeight;
+  if (targetWeight !== undefined) normalized.targetWeight = targetWeight;
+  if (targetDate !== undefined) normalized.targetDate = targetDate;
+  if (height !== undefined) normalized.height = height;
+  if (trainingDays !== undefined) normalized.trainingDays = trainingDays;
+  if (restrictions !== undefined) normalized.restrictions = restrictions;
+  if (allergies !== undefined) normalized.allergies = allergies;
+  if (timeZone !== undefined) normalized.timeZone = timeZone;
+  if (notes !== undefined) normalized.notes = notes;
+
+  if (restored.unit === "kg" || restored.unit === "lb") {
+    normalized.unit = restored.unit;
+  }
+  if (typeof restored.goalType === "string" && GOAL_TYPES.has(restored.goalType)) {
+    normalized.goalType = restored.goalType;
+  }
+  if (typeof restored.activity === "string" && ACTIVITY_LEVELS.has(restored.activity)) {
+    normalized.activity = restored.activity;
+  }
+  if (Array.isArray(restored.safety)) {
+    normalized.safety = restored.safety
+      .filter((flag): flag is string => typeof flag === "string")
+      .map((flag) => flag.slice(0, 120))
+      .slice(0, 10);
+  }
+  if (Array.isArray(restored.acknowledgedWarnings)) {
+    normalized.acknowledgedWarnings = restored.acknowledgedWarnings
+      .filter((warning): warning is Record<string, unknown> =>
+        Boolean(warning) && typeof warning === "object" && !Array.isArray(warning),
+      )
+      .flatMap((warning) => {
+        if (
+          typeof warning.mealType !== "string" ||
+          !MEALS.includes(warning.mealType as Meal) ||
+          typeof warning.warningCode !== "string" ||
+          !WARNING_CODES.has(warning.warningCode) ||
+          warning.contextVersion !== "meal-composition-v1"
+        ) {
+          return [];
+        }
+        return [{
+          mealType: warning.mealType as Meal,
+          warningCode: warning.warningCode,
+          contextVersion: "meal-composition-v1" as const,
+        }];
+      })
+      .slice(0, 8);
+  }
+  return normalized;
+}
+
+function parseStoredDraft(raw: string): StoredDraft {
+  const parsed = JSON.parse(raw) as unknown;
+  if (
+    parsed &&
+    typeof parsed === "object" &&
+    !Array.isArray(parsed) &&
+    (parsed as Record<string, unknown>).version === 1 &&
+    "draft" in (parsed as Record<string, unknown>)
+  ) {
+    const envelope = parsed as Record<string, unknown>;
+    const savedAt =
+      typeof envelope.savedAt === "number" &&
+      Number.isFinite(envelope.savedAt) &&
+      envelope.savedAt >= 0
+        ? envelope.savedAt
+        : 0;
+    const currentStep =
+      typeof envelope.currentStep === "number" &&
+      Number.isInteger(envelope.currentStep) &&
+      envelope.currentStep >= 3 &&
+      envelope.currentStep <= 6
+        ? envelope.currentStep
+        : null;
+    return {
+      draft: normalizeRestoredDraft(envelope.draft),
+      savedAt,
+      currentStep,
+    };
+  }
+  return {
+    draft: normalizeRestoredDraft(parsed),
+    savedAt: 0,
+    currentStep: null,
+  };
 }
 
 function completionFailure(
@@ -151,7 +350,25 @@ function completionFailure(
       field: "session",
       heading: "Your session expired.",
       message:
-        "Log in again to finish onboarding. Your information is still saved in this browser.",
+        "Log in again to finish onboarding. Your current information remains on this page; account-scoped browser storage may also retain it when available.",
+    };
+  }
+  if (code === "EMAIL_VERIFICATION_REQUIRED") {
+    return {
+      field: "verificationCode",
+      heading: "Verify your email first.",
+      message:
+        serverMessage
+        ?? "Verify your email before completing onboarding.",
+    };
+  }
+  if (code === "PROFILE_REQUIRED" || code === "LEGAL_ACCEPTANCE_REQUIRED") {
+    return {
+      field: "account",
+      heading: "Review your account setup.",
+      message:
+        serverMessage
+        ?? "The required account information could not be verified.",
     };
   }
   if (code === "ONBOARDING_DATABASE_OUTDATED") {
@@ -174,13 +391,13 @@ function completionFailure(
       message: `${serverMessage ?? "One or more meal selections need attention."} Choose Edit under Meals, review the foods, and try again.`,
     };
   }
-  if (code === "INVALID_HEIGHT") {
+  if (code === "INVALID_HEIGHT" || code === "MISSING_HEIGHT") {
     return {
       field: "height",
       heading: "Review your height.",
       message:
         serverMessage
-        ?? "Enter a height such as 175 cm or 5 ft 9 in, or leave it blank.",
+        ?? "Choose your height from the list in Step 5 before completing onboarding.",
     };
   }
   if (
@@ -198,14 +415,149 @@ function completionFailure(
         ?? "Enter weights from 20 to 500 kg, or the equivalent in pounds.",
     };
   }
+  if (code === "TARGET_DATE_REQUIRED" || code === "INVALID_TARGET_DATE") {
+    return {
+      field: "targetDate",
+      heading: "Review your target date.",
+      message:
+        serverMessage
+        ?? "Choose a target date that is today or later.",
+    };
+  }
+  if (code === "INVALID_TIME_ZONE") {
+    return {
+      field: "timeZone",
+      heading: "Review your time zone.",
+      message:
+        serverMessage
+        ?? "Choose a supported IANA time zone before completing onboarding.",
+    };
+  }
+  if (code === "TOO_MANY_RESTRICTIONS") {
+    return {
+      field: "restrictions",
+      heading: "Review allergies and restrictions.",
+      message:
+        serverMessage
+        ?? "Use no more than 50 comma-separated allergies or dietary restrictions.",
+    };
+  }
+  if (code === "INVALID_ONBOARDING") {
+    return {
+      field: "profile",
+      heading: "Review your onboarding information.",
+      message:
+        serverMessage
+        ?? "Some required onboarding information needs attention.",
+    };
+  }
   return {
-    field: "profile",
+    field: "completion",
     heading: "We could not complete onboarding.",
     message:
       serverMessage
       ?? "We could not save the final step. Your information is still here; please try again.",
   };
 }
+
+const fieldFocusTargets: Record<string, OnboardingFocusTarget> = {
+  verificationEmail: {
+    step: 2,
+    field: "verificationEmail",
+    selector: "#onboarding-verification-email",
+  },
+  verificationCode: {
+    step: 2,
+    field: "verificationCode",
+    selector: "#onboarding-verification-code-1",
+  },
+  mealPreferences: {
+    step: 3,
+    field: "mealPreferences",
+    selector: ".food-picker input",
+  },
+  goalType: {
+    step: 4,
+    field: "goalType",
+    selector: 'input[name="goal"]',
+  },
+  currentWeight: {
+    step: 4,
+    field: "currentWeight",
+    selector: "#onboarding-current-weight",
+  },
+  targetWeight: {
+    step: 4,
+    field: "targetWeight",
+    selector: "#onboarding-target-weight",
+  },
+  targetDate: {
+    step: 4,
+    field: "targetDate",
+    selector: "#onboarding-target-date",
+  },
+  height: {
+    step: 5,
+    field: "height",
+    selector: ".onboarding-height-field select",
+  },
+  activity: {
+    step: 5,
+    field: "activity",
+    selector: "#onboarding-activity",
+  },
+  trainingDays: {
+    step: 5,
+    field: "trainingDays",
+    selector: "#onboarding-training-days",
+  },
+  timeZone: {
+    step: 5,
+    field: "timeZone",
+    selector: "#onboarding-time-zone",
+  },
+  allergies: {
+    step: 5,
+    field: "allergies",
+    selector: "#onboarding-allergies",
+  },
+  restrictions: {
+    step: 5,
+    field: "restrictions",
+    selector: "#onboarding-restrictions",
+  },
+  confirmation: {
+    step: 6,
+    field: "confirmation",
+    selector: "#onboarding-confirmation",
+  },
+  profile: {
+    step: 5,
+    field: "profile",
+    selector: "#onboarding-step-heading",
+  },
+};
+
+const errorCodeFields: Record<string, keyof typeof fieldFocusTargets> = {
+  INVALID_EMAIL: "verificationEmail",
+  EMAIL_VERIFICATION_REQUIRED: "verificationCode",
+  INVALID_OR_EXPIRED_CODE: "verificationCode",
+  VERIFICATION_CODE_REQUIRED: "verificationCode",
+  FOOD_SELECTION_CHANGED: "mealPreferences",
+  FOOD_NOT_PLAN_ELIGIBLE: "mealPreferences",
+  DUPLICATE_MEAL_FOOD: "mealPreferences",
+  INSUFFICIENT_ELIGIBLE_FOODS: "mealPreferences",
+  INVALID_CURRENT_WEIGHT: "currentWeight",
+  INVALID_TARGET_WEIGHT: "targetWeight",
+  TARGET_DATE_REQUIRED: "targetDate",
+  INVALID_TARGET_DATE: "targetDate",
+  INVALID_HEIGHT: "height",
+  MISSING_HEIGHT: "height",
+  PROFILE_HEIGHT_REQUIRED: "height",
+  TRUSTED_PROFILE_INCOMPLETE: "profile",
+  INVALID_TIME_ZONE: "timeZone",
+  TOO_MANY_RESTRICTIONS: "restrictions",
+};
 
 const stepLabels = [
   "Account and profile",
@@ -340,16 +692,28 @@ function MealDestination({
 export function OnboardingFlow({
   initialStep = 2,
   email = "",
+  draftOwnerKey = null,
 }: {
   initialStep?: number;
   email?: string;
+  draftOwnerKey?: string | null;
 }) {
   const router = useRouter();
-  const [step, setStep] = useState(Math.min(6, Math.max(2, initialStep)));
+  const safeInitialStep = Number.isInteger(initialStep)
+    ? Math.min(6, Math.max(2, initialStep))
+    : 2;
+  const browserDraftKey = useMemo(
+    () => scopedOnboardingDraftKey(draftOwnerKey),
+    [draftOwnerKey],
+  );
+  const [step, setStep] = useState(safeInitialStep);
+  const [stepDirection, setStepDirection] = useState<"forward" | "back">(
+    "forward",
+  );
   const [draft, setDraft] = useState<Draft>(initialDraft);
   const [draftHydrated, setDraftHydrated] = useState(false);
   const [catalogFoods, setCatalogFoods] = useState<Food[]>(fallbackFoods);
-  const [verificationEmail, setVerificationEmail] = useState(email);
+  const [verificationEmail, setVerificationEmail] = useState("");
   const [search, setSearch] = useState("");
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
   const [announcement, setAnnouncement] = useState("");
@@ -362,14 +726,50 @@ export function OnboardingFlow({
   >(null);
   const [exitPending, setExitPending] = useState(false);
   const [pageErrors, setPageErrors] = useState<PageError[]>([]);
+  const [apiError, setApiError] = useState<ApiError | null>(null);
+  const [apiErrorContext, setApiErrorContext] =
+    useState<OnboardingErrorContext | null>(null);
   const [errorHeading, setErrorHeading] = useState("Please review this step.");
+  const [draftPersistenceIssue, setDraftPersistenceIssue] =
+    useState<DraftPersistenceIssue | null>(null);
+  const [draftSyncState, setDraftSyncState] = useState<
+    "checking" | "saved" | "browser-only"
+  >("checking");
+  const [browserDraftAvailable, setBrowserDraftAvailable] = useState(
+    Boolean(browserDraftKey),
+  );
+  const [draftRetryPending, setDraftRetryPending] = useState(false);
   const [resendPending, setResendPending] = useState(false);
-  const [resendSeconds, setResendSeconds] = useState(email ? 60 : 0);
+  const [resendSeconds, setResendSeconds] = useState(0);
   const otpRefs = useRef<Array<HTMLInputElement | null>>([]);
   const errorSummaryRef = useRef<HTMLDivElement | null>(null);
   const draftSaveTimerRef = useRef<number | null>(null);
   const draftSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const draftIssueSignatureRef = useRef<string | null>(null);
   const generationKeyRef = useRef<string | null>(null);
+  const registrationEmailRef = useRef<string | null | undefined>(undefined);
+  const legacyEmailSanitizedRef = useRef(false);
+
+  const reportDraftPersistenceIssue = useCallback(
+    (operation: DraftPersistenceIssue["operation"], error: ApiError) => {
+      const signature = `${operation}:${error.code}:${error.message}`;
+      setDraftSyncState("browser-only");
+      if (draftIssueSignatureRef.current === signature) return;
+      draftIssueSignatureRef.current = signature;
+      setDraftPersistenceIssue({ operation, error });
+    },
+    [],
+  );
+
+  const markDraftSynced = useCallback(() => {
+    const recovered = draftIssueSignatureRef.current !== null;
+    draftIssueSignatureRef.current = null;
+    setDraftPersistenceIssue(null);
+    setDraftSyncState("saved");
+    if (recovered) {
+      setAnnouncement("Onboarding progress is saved to your account again.");
+    }
+  }, []);
 
   const loadCatalogFoods = useCallback(async (query = "") => {
     try {
@@ -393,7 +793,7 @@ export function OnboardingFlow({
           source?: FoodSourceSummary | null;
         }>;
       };
-      if (!result.data?.length) return false;
+      if (!Array.isArray(result.data)) return false;
       const nextFoods = result.data.map((food) => ({
           id: food.slug,
           name: food.english_name,
@@ -423,75 +823,226 @@ export function OnboardingFlow({
       const save = draftSaveQueueRef.current
         .catch(() => undefined)
         .then(async () => {
-          const response = await fetch("/api/onboarding", {
-            method: "PATCH",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              currentStep,
-              draft: draftSnapshot,
-            }),
-          });
-          if (!response.ok) throw new Error("draft_save_failed");
+          const fallback = clientApiError(
+            "DRAFT_SAVE_NETWORK_ERROR",
+            "Onboarding progress could not be saved to your account.",
+            "The current information remains on this page. When account-scoped browser storage is available, it is retained there too; check the connection and try account sync again.",
+            {
+              retryable: true,
+              action: { kind: "retry", label: "Try again" },
+            },
+          );
+          try {
+            const response = await fetch("/api/onboarding", {
+              method: "PATCH",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                currentStep,
+                draft: draftSnapshot,
+              }),
+            });
+            if (!response.ok) {
+              const result =
+                typeof response.json === "function"
+                  ? await response.json().catch(() => null)
+                  : null;
+              throw apiErrorFromPayload(
+                result,
+                clientApiError(
+                  "DRAFT_SAVE_RESPONSE_INVALID",
+                  "The account did not accept this onboarding autosave.",
+                  "The current information remains on this page. Review the sync code, then try account sync again.",
+                  {
+                    retryable: true,
+                    action: { kind: "retry", label: "Try again" },
+                  },
+                ),
+              );
+            }
+            markDraftSynced();
+          } catch (error) {
+            const publicError = apiErrorFromPayload({ error }, fallback);
+            reportDraftPersistenceIssue("save", publicError);
+            throw publicError;
+          }
         });
       draftSaveQueueRef.current = save;
       return save;
     },
-    [],
+    [markDraftSynced, reportDraftPersistenceIssue],
   );
 
   useEffect(() => {
+    if (registrationEmailRef.current === undefined) {
+      let storedHandoff: string | null = null;
+      try {
+        storedHandoff = window.sessionStorage.getItem(
+          REGISTRATION_EMAIL_HANDOFF_KEY,
+        );
+        window.sessionStorage.removeItem(REGISTRATION_EMAIL_HANDOFF_KEY);
+      } catch {
+        // The verification email remains editable when storage is unavailable.
+      }
+      registrationEmailRef.current =
+        readRegistrationEmailHandoff(storedHandoff) ??
+        normalizeRegistrationEmail(email);
+    }
+
+    const handedOffEmail = registrationEmailRef.current;
+    const timer = handedOffEmail
+      ? window.setTimeout(() => {
+          setVerificationEmail(handedOffEmail);
+          setResendSeconds(60);
+        }, 0)
+      : null;
+
+    if (email && !legacyEmailSanitizedRef.current) {
+      legacyEmailSanitizedRef.current = true;
+      router.replace(`/onboarding?step=${safeInitialStep}`);
+    }
+
+    return () => {
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [email, router, safeInitialStep]);
+
+  useEffect(() => {
+    const hydrationTimer = window.setTimeout(() => {
     const detectedTimeZone =
       Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-    window.setTimeout(() => {
-      setDraft((current) =>
-        current.timeZone === "UTC"
-          ? { ...current, timeZone: detectedTimeZone }
-          : current,
-      );
-    }, 0);
-    const currentSaved = window.localStorage.getItem(ONBOARDING_DRAFT_KEY);
-    const legacySaved = window.localStorage.getItem(
-      LEGACY_ONBOARDING_DRAFT_KEY,
+    setDraft((current) =>
+      current.timeZone === "UTC"
+        ? { ...current, timeZone: detectedTimeZone }
+        : current,
     );
-    const saved = currentSaved ?? legacySaved;
+
+    const local = browserStorage("localStorage");
+    // Unscoped pre-Beta.3 drafts cannot be safely attributed on a shared
+    // browser, so remove them without restoring their sensitive contents.
+    removeStorage(local, UNSCOPED_ONBOARDING_DRAFT_KEY);
+    removeStorage(local, LEGACY_ONBOARDING_DRAFT_KEY);
+    const saved = browserDraftKey ? readStorage(local, browserDraftKey) : null;
+    let browserSavedAt = 0;
+    setBrowserDraftAvailable(Boolean(local && browserDraftKey));
     if (saved) {
       try {
-        const restored = normalizeRestoredDraft(JSON.parse(saved));
-        if (!currentSaved && legacySaved) {
-          window.localStorage.setItem(ONBOARDING_DRAFT_KEY, legacySaved);
-          window.localStorage.removeItem(LEGACY_ONBOARDING_DRAFT_KEY);
+        const restored = parseStoredDraft(saved);
+        browserSavedAt = restored.savedAt;
+        setDraft((current) => ({ ...current, ...restored.draft }));
+        if (restored.currentStep !== null) {
+          setStepDirection(
+            restored.currentStep < safeInitialStep ? "back" : "forward",
+          );
+          setStep(restored.currentStep);
         }
-        window.setTimeout(() => {
-          setDraft((current) => ({ ...current, ...restored }));
-        }, 0);
       } catch {
-        window.localStorage.removeItem(ONBOARDING_DRAFT_KEY);
-        window.localStorage.removeItem(LEGACY_ONBOARDING_DRAFT_KEY);
+        if (browserDraftKey) removeStorage(local, browserDraftKey);
       }
     }
-    fetch("/api/onboarding")
-      .then((response) => (response.ok ? response.json() : null))
-      .then((result: { data?: { currentStep?: number; draft?: Partial<Draft> } } | null) => {
-        if (result?.data?.draft) {
+    const loadAccountDraft = async () => {
+      const fallback = clientApiError(
+        "DRAFT_LOAD_NETWORK_ERROR",
+        "Saved account progress could not be loaded.",
+        "You can continue with the current information on this page. An account-scoped browser copy is used only when browser storage is available.",
+        {
+          retryable: true,
+          action: { kind: "retry", label: "Try account sync" },
+        },
+      );
+      try {
+        const response = await fetch("/api/onboarding");
+        const result =
+          typeof response.json === "function"
+            ? ((await response.json().catch(() => null)) as
+                | {
+                    data?: {
+                      currentStep?: number;
+                      draft?: Partial<Draft>;
+                      updatedAt?: string | null;
+                    };
+                    error?: ApiError | null;
+                  }
+                | null)
+            : null;
+        if (!response.ok) {
+          throw apiErrorFromPayload(result, fallback);
+        }
+        if (!result || !("data" in result)) {
+          throw clientApiError(
+            "DRAFT_LOAD_RESPONSE_INVALID",
+            "The account returned an unreadable saved-progress response.",
+            "You can continue with the current information on this page and try account sync again.",
+            {
+              retryable: true,
+              action: { kind: "retry", label: "Try account sync" },
+            },
+          );
+        }
+        const accountUpdatedAt = result?.data?.updatedAt
+          ? Date.parse(result.data.updatedAt)
+          : 0;
+        const accountDraftWins =
+          !browserSavedAt ||
+          (Number.isFinite(accountUpdatedAt) && accountUpdatedAt >= browserSavedAt);
+        if (result?.data?.draft && accountDraftWins) {
           const restored = normalizeRestoredDraft(result.data.draft);
           setDraft((current) => ({ ...current, ...restored }));
         }
-        if (result?.data?.currentStep && result.data.currentStep >= 3) {
-          goToStep(result.data.currentStep);
+        const accountStep = result?.data?.currentStep;
+        if (
+          accountDraftWins &&
+          typeof accountStep === "number" &&
+          Number.isInteger(accountStep) &&
+          accountStep >= 3
+        ) {
+          const restoredStep = Math.min(6, accountStep);
+          setStepDirection(restoredStep < safeInitialStep ? "back" : "forward");
+          setStep(restoredStep);
         }
-      })
-      .catch(() => undefined)
-      .finally(() => setDraftHydrated(true));
-    if (initialStep >= 3) {
+      } catch (error) {
+        reportDraftPersistenceIssue(
+          "load",
+          apiErrorFromPayload({ error }, fallback),
+        );
+      } finally {
+        setDraftHydrated(true);
+      }
+    };
+    void loadAccountDraft();
+    if (safeInitialStep >= 3) {
       window.setTimeout(() => {
         void loadCatalogFoods();
       }, 0);
     }
-  }, [initialStep, loadCatalogFoods]);
+    }, 0);
+    return () => window.clearTimeout(hydrationTimer);
+  }, [browserDraftKey, loadCatalogFoods, reportDraftPersistenceIssue, safeInitialStep]);
 
   useEffect(() => {
-    window.localStorage.setItem(ONBOARDING_DRAFT_KEY, JSON.stringify(draft));
-  }, [draft]);
+    if (!draftHydrated) return;
+    if (!browserDraftKey) {
+      const unavailableTimer = window.setTimeout(
+        () => setBrowserDraftAvailable(false),
+        0,
+      );
+      return () => window.clearTimeout(unavailableTimer);
+    }
+    const saved = writeStorage(
+      browserStorage("localStorage"),
+      browserDraftKey,
+      JSON.stringify({
+        version: 1,
+        savedAt: Date.now(),
+        currentStep: step,
+        draft,
+      }),
+    );
+    const availabilityTimer = window.setTimeout(
+      () => setBrowserDraftAvailable(saved),
+      0,
+    );
+    return () => window.clearTimeout(availabilityTimer);
+  }, [browserDraftKey, draft, draftHydrated, step]);
 
   useEffect(() => {
     if (step < 3 || !draftHydrated) return;
@@ -531,9 +1082,25 @@ export function OnboardingFlow({
     errors: PageError[],
     heading = "Please review this step.",
   ) {
+    setApiError(null);
+    setApiErrorContext(null);
     setErrorHeading(heading);
     setPageErrors(errors);
-    setAnnouncement(errors.map((error) => error.message).join(" "));
+    setAnnouncement("");
+    window.requestAnimationFrame(() => errorSummaryRef.current?.focus());
+  }
+
+  function showApiError(
+    error: ApiError,
+    heading: string,
+    context: OnboardingErrorContext,
+    field?: string,
+  ) {
+    setPageErrors(field ? [{ field, message: error.message }] : []);
+    setErrorHeading(heading);
+    setApiError(error);
+    setApiErrorContext(context);
+    setAnnouncement("");
     window.requestAnimationFrame(() => errorSummaryRef.current?.focus());
   }
 
@@ -541,13 +1108,35 @@ export function OnboardingFlow({
     return pageErrors.some((error) => error.field === field);
   }
 
-  function goToStep(nextStep: number) {
+  function goToStep(nextStep: number, focusHeading = true) {
+    if (completionPhase !== null) return;
     setPageErrors([]);
+    setApiError(null);
+    setApiErrorContext(null);
+    setStepDirection(nextStep < step ? "back" : "forward");
     setStep(nextStep);
+    if (focusHeading) {
+      window.requestAnimationFrame(() => {
+        document.getElementById("onboarding-step-heading")?.focus();
+      });
+    }
+  }
+
+  function goToStepWithErrors(
+    nextStep: number,
+    errors: PageError[],
+    heading: string,
+  ) {
+    setStepDirection(nextStep < step ? "back" : "forward");
+    setStep(nextStep);
+    showPageErrors(errors, heading);
   }
 
   function update<K extends keyof Draft>(key: K, value: Draft[K]) {
+    if (completionPhase !== null) return;
     setPageErrors([]);
+    setApiError(null);
+    setApiErrorContext(null);
     setDraft((current) => ({ ...current, [key]: value }));
   }
 
@@ -595,11 +1184,17 @@ export function OnboardingFlow({
   function validateLifestyleStep(): PageError[] {
     const errors: PageError[] = [];
     const trainingDays = Number(draft.trainingDays);
-    if (!parseOptionalHeight(draft.height).ok) {
+    const parsedHeight = parseOptionalHeight(draft.height);
+    if (!draft.height.trim()) {
+      errors.push({
+        field: "height",
+        message: "Choose your height from the list.",
+      });
+    } else if (!parsedHeight.ok || parsedHeight.heightCm === null) {
       errors.push({
         field: "height",
         message:
-          "Enter a height from 50 to 300 cm, such as 175 cm or 5 ft 9 in, or leave it blank.",
+          "Choose a height from 50 to 300 cm using the centimeters or feet-and-inches lists.",
       });
     }
     if (!draft.activity) {
@@ -755,6 +1350,8 @@ export function OnboardingFlow({
       return;
     }
     setPageErrors([]);
+    setApiError(null);
+    setApiErrorContext(null);
     setPending(true);
     try {
       const response = await fetch("/api/auth/verify", {
@@ -765,22 +1362,59 @@ export function OnboardingFlow({
           token: otp.join(""),
         }),
       });
-      if (!response.ok) throw new Error();
+      if (!response.ok) {
+        const result =
+          typeof response.json === "function"
+            ? await response.json().catch(() => null)
+            : null;
+        const parsed = apiErrorFromPayload(
+          result,
+          clientApiError(
+            "VERIFICATION_RESPONSE_INVALID",
+            "Email verification could not be completed.",
+            "Request a new code and try again. Your registration information is unchanged.",
+            {
+              retryable: true,
+              action: { kind: "retry", label: "Request a new code" },
+            },
+          ),
+        );
+        showApiError(
+          parsed.action
+            ? parsed
+            : {
+                ...parsed,
+                action: { kind: "retry", label: "Request a new code" },
+              },
+          "We could not verify your email.",
+          "verify",
+          "verificationCode",
+        );
+        return;
+      }
       await loadCatalogFoods();
-      window.localStorage.removeItem(REGISTRATION_DRAFT_KEY);
-      window.localStorage.removeItem(LEGACY_REGISTRATION_DRAFT_KEY);
+      const local = browserStorage("localStorage");
+      removeStorage(local, REGISTRATION_DRAFT_KEY);
+      removeStorage(local, LEGACY_REGISTRATION_DRAFT_KEY);
+      // Email verification may establish the first authenticated server
+      // session. Refresh the server props so subsequent browser drafts receive
+      // this account's private storage scope without exposing it in the URL.
+      router.refresh();
       goToStep(3);
       setAnnouncement("Email verified. Food preferences are next.");
     } catch {
-      showPageErrors(
-        [
+      showApiError(
+        clientApiError(
+          "VERIFICATION_NETWORK_ERROR",
+          "The account service could not be reached.",
+          "Check your connection, then request a new code and try again.",
           {
-            field: "verificationCode",
-            message:
-              "That code is invalid or expired. Request a new code and try again.",
+            retryable: true,
+            action: { kind: "retry", label: "Request a new code" },
           },
-        ],
+        ),
         "We could not verify your email.",
+        "verify",
       );
     } finally {
       setPending(false);
@@ -809,14 +1443,48 @@ export function OnboardingFlow({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ email: verificationEmail.trim() }),
       });
-      if (!response.ok) throw new Error("resend_failed");
+      if (!response.ok) {
+        const result =
+          typeof response.json === "function"
+            ? await response.json().catch(() => null)
+            : null;
+        showApiError(
+          apiErrorFromPayload(
+            result,
+            clientApiError(
+              "VERIFICATION_EMAIL_RESPONSE_INVALID",
+              "A verification email could not be sent right now.",
+              "This response does not indicate whether an account exists. Wait briefly and request one new code.",
+              {
+                retryable: true,
+                action: { kind: "retry", label: "Try again" },
+              },
+            ),
+          ),
+          "We could not request a new code.",
+          "resend",
+        );
+        return;
+      }
+      setApiError(null);
+      setApiErrorContext(null);
       setResendSeconds(60);
       setAnnouncement(
         "A new verification code was requested. Check the latest email.",
       );
     } catch {
-      setAnnouncement(
-        "A new code could not be requested yet. Wait a moment and try again.",
+      showApiError(
+        clientApiError(
+          "VERIFICATION_EMAIL_NETWORK_ERROR",
+          "The account service could not be reached.",
+          "This does not indicate whether an account exists. Check the connection, wait briefly, and request one new code.",
+          {
+            retryable: true,
+            action: { kind: "retry", label: "Try again" },
+          },
+        ),
+        "We could not request a new code.",
+        "resend",
       );
     } finally {
       setResendPending(false);
@@ -864,35 +1532,72 @@ export function OnboardingFlow({
     }
     setExitPending(true);
     setPageErrors([]);
+    setApiError(null);
+    setApiErrorContext(null);
     try {
       await queueDraftPersistence(step, draft);
       router.push("/today");
-    } catch {
-      showPageErrors(
-        [
-          {
-            field: "draft",
-            message:
-              "Your draft could not be saved to your account. Your local copy is still here; please try again.",
-          },
-        ],
+    } catch (error) {
+      showApiError(
+        apiErrorFromPayload(
+          { error },
+          clientApiError(
+            "DRAFT_SAVE_NETWORK_ERROR",
+            "Onboarding progress could not be saved.",
+            "The current form values are unchanged. Check the connection and try again.",
+            {
+              retryable: true,
+              action: { kind: "retry", label: "Try again" },
+            },
+          ),
+        ),
         "We could not save and exit.",
+        "save-draft",
       );
     } finally {
       setExitPending(false);
     }
   }
 
+  async function retryDraftPersistence() {
+    if (draftRetryPending) return;
+    setDraftRetryPending(true);
+    setAnnouncement("Retrying account draft sync.");
+    try {
+      await queueDraftPersistence(step, draft);
+    } catch {
+      // queueDraftPersistence keeps one visible browser-only status and avoids
+      // turning background sync retries into repeated assertive alerts.
+    } finally {
+      setDraftRetryPending(false);
+    }
+  }
+
   async function finish(generate: boolean) {
-    const requiredErrors = [
-      ...mealEligibilityErrors(),
-      ...validateGoalStep(),
-      ...validateLifestyleStep(),
-    ];
-    if (requiredErrors.length > 0) {
-      showPageErrors(
-        requiredErrors,
-        "Complete the required information before finishing.",
+    const mealErrors = mealEligibilityErrors();
+    if (mealErrors.length > 0) {
+      goToStepWithErrors(
+        3,
+        mealErrors,
+        "Review your meal selections before finishing.",
+      );
+      return;
+    }
+    const goalErrors = validateGoalStep();
+    if (goalErrors.length > 0) {
+      goToStepWithErrors(
+        4,
+        goalErrors,
+        "Complete your goal and timeline before finishing.",
+      );
+      return;
+    }
+    const lifestyleErrors = validateLifestyleStep();
+    if (lifestyleErrors.length > 0) {
+      goToStepWithErrors(
+        5,
+        lifestyleErrors,
+        "Complete the required lifestyle details before finishing.",
       );
       return;
     }
@@ -907,6 +1612,8 @@ export function OnboardingFlow({
       return;
     }
     setPageErrors([]);
+    setApiError(null);
+    setApiErrorContext(null);
     setPending(true);
     setCompletionPhase("saving");
     try {
@@ -929,30 +1636,74 @@ export function OnboardingFlow({
           : null;
       if (!response.ok) {
         const failure = completionFailure(result);
-        showPageErrors(
-          [{ field: failure.field, message: failure.message }],
+        if (result?.error?.code === "TOO_MANY_RESTRICTIONS") {
+          const allergyCount = draft.allergies
+            .split(",")
+            .map((item) => item.trim())
+            .filter(Boolean).length;
+          failure.field = allergyCount > 50 ? "allergies" : "restrictions";
+        }
+        const parsedError = apiErrorFromPayload(
+          result,
+          clientApiError(
+            "ONBOARDING_RESPONSE_INVALID",
+            "The final onboarding step could not be saved.",
+            "Your information remains on this page. Wait briefly and try again.",
+            {
+              retryable: true,
+              action: { kind: "retry", label: "Try again" },
+            },
+          ),
+        );
+        const structuredField = errorCodeFields[parsedError.code];
+        if (
+          structuredField &&
+          parsedError.code !== "TOO_MANY_RESTRICTIONS"
+        ) {
+          failure.field = structuredField;
+        }
+        const contextualDetails = failure.message.startsWith(
+          `${parsedError.message} `,
+        )
+          ? failure.message.slice(parsedError.message.length + 1)
+          : failure.message === parsedError.message
+            ? undefined
+            : failure.message;
+        const failureStep = fieldFocusTargets[failure.field]?.step ?? step;
+        setStepDirection(failureStep < step ? "back" : "forward");
+        setStep(failureStep);
+        showApiError(
+          parsedError.details || !contextualDetails
+            ? parsedError
+            : { ...parsedError, details: contextualDetails },
           failure.heading,
+          generate ? "complete-generate" : "complete-today",
+          failure.field,
         );
         setPending(false);
         setCompletionPhase(null);
         return;
       }
-      window.localStorage.removeItem(ONBOARDING_DRAFT_KEY);
-      window.localStorage.removeItem(LEGACY_ONBOARDING_DRAFT_KEY);
+      if (browserDraftKey) {
+        removeStorage(browserStorage("localStorage"), browserDraftKey);
+      }
       if (!generate) {
         router.push("/today");
         return;
       }
     } catch {
-      showPageErrors(
-        [
+      showApiError(
+        clientApiError(
+          "ONBOARDING_NETWORK_ERROR",
+          "Onboarding services could not be reached.",
+          "The final step was not confirmed. Your information remains on this page.",
           {
-            field: "profile",
-            message:
-              "We could not save the final step. Your information is still here; please try again.",
+            retryable: true,
+            action: { kind: "retry", label: "Try again" },
           },
-        ],
+        ),
         "We could not complete onboarding.",
+        generate ? "complete-generate" : "complete-today",
       );
       setPending(false);
       setCompletionPhase(null);
@@ -977,16 +1728,21 @@ export function OnboardingFlow({
           : null;
       if (!generationResponse.ok) {
         generationKeyRef.current = null;
-        showPageErrors(
-          [
-            {
-              field: "generation",
-              message:
-                generationResult?.error?.message
-                ?? "Your profile is saved, but a new plan could not be generated. Try again with a new request, or go to Today.",
-            },
-          ],
+        showApiError(
+          apiErrorFromPayload(
+            generationResult,
+            clientApiError(
+              "PLAN_RESPONSE_INVALID",
+              "A new plan could not be generated.",
+              "Your profile is saved and any accepted plan is unchanged. Try one new generation request, or go to Today.",
+              {
+                retryable: true,
+                action: { kind: "retry", label: "Generate again" },
+              },
+            ),
+          ),
           "Your profile is complete.",
+          "generate",
         );
         return;
       }
@@ -1010,30 +1766,36 @@ export function OnboardingFlow({
       const planId = generationResult?.data?.planId;
       if (typeof planId !== "string" || !planId.trim()) {
         generationKeyRef.current = null;
-        showPageErrors(
-          [
+        showApiError(
+          clientApiError(
+            "PLAN_RESULT_MISSING",
+            "The completed request did not include a plan.",
+            "Your profile is saved and any accepted plan is unchanged. Try one new generation request, or go to Today.",
             {
-              field: "generation",
-              message:
-                "Your profile is saved, but the completed request did not include a plan. Try again with a new request, or go to Today.",
+              retryable: true,
+              action: { kind: "retry", label: "Generate again" },
             },
-          ],
+          ),
           "Your profile is complete.",
+          "generate",
         );
         return;
       }
       generationKeyRef.current = null;
       router.push("/plan");
     } catch {
-      showPageErrors(
-        [
+      showApiError(
+        clientApiError(
+          "PLAN_NETWORK_ERROR",
+          "Plan generation could not start.",
+          "Your profile is saved and any accepted plan is unchanged. Check the connection, then try Generate my plan again or go to Today.",
           {
-            field: "generation",
-            message:
-              "Your profile is saved, but plan generation could not start. Try Generate my plan again, or go to Today.",
+            retryable: true,
+            action: { kind: "retry", label: "Generate again" },
           },
-        ],
+        ),
         "Your profile is complete.",
+        "generate",
       );
     } finally {
       setPending(false);
@@ -1041,12 +1803,132 @@ export function OnboardingFlow({
     }
   }
 
+  function onboardingErrorFocusTarget(): OnboardingFocusTarget | null {
+    const code = apiError?.code ?? "";
+    const mappedField = errorCodeFields[code];
+    if (mappedField) {
+      if (code === "TOO_MANY_RESTRICTIONS") {
+        const field = pageErrors[0]?.field;
+        if (field === "allergies" || field === "restrictions") {
+          return fieldFocusTargets[field];
+        }
+      }
+      return fieldFocusTargets[mappedField];
+    }
+
+    const explicitField = pageErrors.find(
+      (error) => fieldFocusTargets[error.field],
+    )?.field;
+    if (explicitField) return fieldFocusTargets[explicitField];
+
+    if (code === "INVALID_ONBOARDING") {
+      const localError = validateGoalStep()[0] ?? validateLifestyleStep()[0];
+      return localError
+        ? fieldFocusTargets[localError.field]
+        : fieldFocusTargets.profile;
+    }
+
+    if (apiErrorContext === "verify") {
+      return fieldFocusTargets.verificationCode;
+    }
+    if (apiErrorContext === "resend") {
+      return fieldFocusTargets.verificationEmail;
+    }
+    return null;
+  }
+
+  function focusOnboardingErrorTarget() {
+    const target = onboardingErrorFocusTarget();
+    if (!target) {
+      errorSummaryRef.current?.focus();
+      return;
+    }
+    setStepDirection(target.step < step ? "back" : "forward");
+    setStep(target.step);
+    window.requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>(target.selector)?.focus();
+    });
+  }
+
+  function handleApiErrorAction() {
+    if (apiError?.code === "CAPTCHA_FAILED") {
+      window.location.reload();
+      return;
+    }
+    const localTarget = onboardingErrorFocusTarget();
+    const internalOnboardingAction =
+      apiError?.action?.href?.startsWith("/onboarding") === true;
+    if (
+      localTarget &&
+      (apiError?.action?.kind === "edit" || internalOnboardingAction)
+    ) {
+      focusOnboardingErrorTarget();
+      return;
+    }
+    switch (apiErrorContext) {
+      case "verify":
+      case "resend":
+        void resendOtp();
+        break;
+      case "save-draft":
+        void saveAndExit();
+        break;
+      case "complete-today":
+        void finish(false);
+        break;
+      case "complete-generate":
+      case "generate":
+        void finish(true);
+        break;
+    }
+  }
+
   const safetyFlag = draft.safety.length > 0;
+  const apiFocusTarget = onboardingErrorFocusTarget();
+  const apiActionIsLocal = Boolean(
+    apiError?.action &&
+      apiFocusTarget &&
+      (apiError.action.kind === "edit" ||
+        apiError.action.href?.startsWith("/onboarding")),
+  );
+  const displayedApiError =
+    apiError && apiActionIsLocal && apiError.action
+      ? {
+          ...apiError,
+          action: {
+            kind: "edit" as const,
+            label: apiError.action.label,
+          },
+        }
+      : apiError;
+  const apiActionCanRun =
+    apiError?.action?.kind === "retry" ||
+    apiActionIsLocal;
+  const topLevelContentClass = `onboarding-content${
+    step === 3 ? " onboarding-content-food" : ""
+  }`;
+  const progressSaveLabel =
+    step <= 2
+      ? "Progress saves after verification"
+      : draftSyncState === "saved"
+        ? browserDraftAvailable
+          ? "Saved in this browser and your account"
+          : "Saved to your account · browser storage unavailable"
+        : draftSyncState === "browser-only"
+          ? browserDraftAvailable
+            ? "Saved in this browser only"
+            : "Not saved · browser storage and account sync unavailable"
+          : browserDraftAvailable
+            ? "Browser draft protected · checking account sync"
+            : "Browser storage unavailable · checking account sync";
 
   return (
     <div className="onboarding-shell">
       <aside className="onboarding-rail">
-        <BrandLink />
+        <div className="onboarding-rail-top">
+          <BrandLink />
+          <AppearanceControl />
+        </div>
         <ol className="step-list">
           {stepLabels.map((label, index) => {
             const number = index + 1;
@@ -1063,34 +1945,103 @@ export function OnboardingFlow({
       <main id="main-content" className="onboarding-main">
         <div className="onboarding-header">
           <span className="mobile-progress">Step {step} of 6 · {stepLabels[step - 1]}</span>
-          <span className="date-label">Your progress is saved after verification</span>
+          <span className="date-label">{progressSaveLabel}</span>
           {step > 2 ? <button className="text-link" disabled={exitPending || pending} type="button" onClick={saveAndExit}>{exitPending ? "Saving draft…" : "Save and exit"}</button> : <span />}
         </div>
-        <p className="sr-only" aria-live="assertive">{announcement}</p>
-        {pageErrors.length > 0 ? (
-          <div
-            className="message-box error"
-            ref={errorSummaryRef}
-            role="alert"
-            tabIndex={-1}
-            style={{ marginBottom: "1rem" }}
-          >
-            <div>
-              <strong>{errorHeading}</strong>
-              <ul style={{ margin: ".35rem 0 0", paddingLeft: "1.2rem" }}>
-                {pageErrors.map((error) => (
-                  <li key={`${error.field}:${error.message}`}>{error.message}</li>
-                ))}
-              </ul>
-            </div>
+        <p className="sr-only" role="status" aria-live="polite">{announcement}</p>
+        {apiError || pageErrors.length > 0 || draftPersistenceIssue ? (
+          <div className={topLevelContentClass} style={{ marginBottom: "1rem" }}>
+            {displayedApiError ? (
+              <ApiErrorNotice
+                actionDisabled={
+                  pending ||
+                  exitPending ||
+                  resendPending ||
+                  ((apiErrorContext === "verify" || apiErrorContext === "resend") &&
+                    resendSeconds > 0)
+                }
+                error={displayedApiError}
+                heading={errorHeading}
+                onAction={apiActionCanRun ? handleApiErrorAction : undefined}
+                ref={errorSummaryRef}
+              />
+            ) : pageErrors.length > 0 ? (
+              <div
+                className="message-box error"
+                ref={errorSummaryRef}
+                role="alert"
+                tabIndex={-1}
+                style={{ marginBottom: "1rem" }}
+              >
+                <div>
+                  <strong>{errorHeading}</strong>
+                  <ul style={{ margin: ".35rem 0 0", paddingLeft: "1.2rem" }}>
+                    {pageErrors.map((error) => (
+                      <li key={`${error.field}:${error.message}`}>{error.message}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            ) : draftPersistenceIssue ? (
+              <div
+                aria-atomic="true"
+                className="message-box"
+                role="status"
+                style={{ marginBottom: "1rem" }}
+              >
+                <div>
+                  <strong>
+                    {draftPersistenceIssue.operation === "load"
+                      ? "Account progress could not be loaded."
+                      : browserDraftAvailable
+                        ? "Saved in this browser only."
+                        : "Progress is not saved yet."}
+                  </strong>
+                  <p>{draftPersistenceIssue.error.message}</p>
+                  {draftPersistenceIssue.error.details ? (
+                    <p>{draftPersistenceIssue.error.details}</p>
+                  ) : null}
+                  <code>Sync code: {draftPersistenceIssue.error.code}</code>
+                  <div style={{ marginTop: ".75rem" }}>
+                    {draftPersistenceIssue.error.action?.href ? (
+                      <button
+                        className="button button-quiet"
+                        onClick={() =>
+                          router.push(draftPersistenceIssue.error.action!.href!)
+                        }
+                        type="button"
+                      >
+                        {draftPersistenceIssue.error.action.label}
+                      </button>
+                    ) : (
+                      <button
+                        className="button button-quiet"
+                        disabled={draftRetryPending}
+                        onClick={() => void retryDraftPersistence()}
+                        type="button"
+                      >
+                        {draftRetryPending ? "Syncing…" : "Try account sync"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
 
-        <div className="onboarding-content">
+        <div
+          className={topLevelContentClass}
+        >
+          <div
+            className="onboarding-step-transition"
+            data-direction={stepDirection}
+            key={step}
+          >
           {step === 2 ? (
             <>
               <p className="eyebrow">Step 2 of 6</p>
-              <h1>Check your email.</h1>
+              <h1 id="onboarding-step-heading" tabIndex={-1}>Check your email.</h1>
               <p>
                 Enter the six-digit code for the account below. Returning later is
                 safe: request a new code without creating another account. In local
@@ -1099,11 +2050,14 @@ export function OnboardingFlow({
               <label className="field" style={{ marginBottom: "1rem" }}>
                 <span>Account email</span>
                 <input
+                  id="onboarding-verification-email"
                   aria-invalid={hasPageError("verificationEmail") || undefined}
                   autoComplete="email"
                   inputMode="email"
                   onChange={(event) => {
                     setPageErrors([]);
+                    setApiError(null);
+                    setApiErrorContext(null);
                     setVerificationEmail(event.target.value);
                     setResendSeconds(0);
                   }}
@@ -1114,6 +2068,7 @@ export function OnboardingFlow({
               <div className="otp-grid" role="group" aria-label="Six-digit verification code" aria-invalid={hasPageError("verificationCode") || undefined}>
                 {otp.map((digit, index) => (
                   <input
+                    id={`onboarding-verification-code-${index + 1}`}
                     key={index}
                     ref={(element) => { otpRefs.current[index] = element; }}
                     aria-label={`Digit ${index + 1}`}
@@ -1126,6 +2081,8 @@ export function OnboardingFlow({
                       const next = [...otp];
                       next[index] = value;
                       setPageErrors([]);
+                      setApiError(null);
+                      setApiErrorContext(null);
                       setOtp(next);
                       if (value && index < 5) otpRefs.current[index + 1]?.focus();
                     }}
@@ -1174,7 +2131,7 @@ export function OnboardingFlow({
           {step === 3 ? (
             <>
               <p className="eyebrow">Step 3 of 6</p>
-              <h1>What works on your plate?</h1>
+              <h1 id="onboarding-step-heading" tabIndex={-1}>What works on your plate?</h1>
               <p>Add foods to each meal. Search, buttons, keyboard reordering, and drag-and-drop all lead to the same result.</p>
               <div className="food-picker">
                 <FoodSearchPicker
@@ -1200,7 +2157,7 @@ export function OnboardingFlow({
           {step === 4 ? (
             <>
               <p className="eyebrow">Step 4 of 6</p>
-              <h1>Set a direction, not a promise.</h1>
+              <h1 id="onboarding-step-heading" tabIndex={-1}>Set a direction, not a promise.</h1>
               <p>We&apos;ll show the implied pace and flag conflicts without forcing restriction to meet a date.</p>
               <div className="option-grid" style={{ marginBottom: "1rem" }}>
                 {[
@@ -1210,10 +2167,10 @@ export function OnboardingFlow({
                 ))}
               </div>
               <div className="field-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
-                <label className="field"><span>Current weight</span><input inputMode="decimal" aria-invalid={hasPageError("currentWeight") || undefined} value={draft.currentWeight} onChange={(event) => update("currentWeight", event.target.value)} /></label>
-                <label className="field"><span>Target weight</span><input inputMode="decimal" aria-invalid={hasPageError("targetWeight") || undefined} value={draft.targetWeight} onChange={(event) => update("targetWeight", event.target.value)} /></label>
+                <label className="field"><span>Current weight</span><input id="onboarding-current-weight" inputMode="decimal" aria-invalid={hasPageError("currentWeight") || undefined} value={draft.currentWeight} onChange={(event) => update("currentWeight", event.target.value)} /></label>
+                <label className="field"><span>Target weight</span><input id="onboarding-target-weight" inputMode="decimal" aria-invalid={hasPageError("targetWeight") || undefined} value={draft.targetWeight} onChange={(event) => update("targetWeight", event.target.value)} /></label>
                 <label className="field"><span>Display unit</span><select value={draft.unit} onChange={(event) => switchUnit(event.target.value as Unit)}><option value="kg">kg</option><option value="lb">lb</option></select></label>
-                <label className="field"><span>Target date</span><input type="date" aria-invalid={hasPageError("targetDate") || undefined} value={draft.targetDate} onChange={(event) => update("targetDate", event.target.value)} /></label>
+                <label className="field"><span>Target date</span><input id="onboarding-target-date" type="date" aria-invalid={hasPageError("targetDate") || undefined} value={draft.targetDate} onChange={(event) => update("targetDate", event.target.value)} /></label>
               </div>
               {currentKg && targetKg ? (
                 <div className="message-box" style={{ marginTop: "1rem" }}>
@@ -1233,24 +2190,23 @@ export function OnboardingFlow({
           {step === 5 ? (
             <>
               <p className="eyebrow">Step 5 of 6</p>
-              <h1>Add context if it helps.</h1>
-              <p>These questions are optional. They help the app avoid unsuitable suggestions and communicate uncertainty.</p>
-              <div className="field-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
-                <label className="field">
-                  <span>Height (optional)</span>
-                  <input
-                    aria-invalid={hasPageError("height") || undefined}
+              <h1 id="onboarding-step-heading" tabIndex={-1}>Add the context your plan needs.</h1>
+              <p>Height, activity, training, and time zone shape the deterministic plan estimate. Allergies, restrictions, safety context, and notes help avoid unsuitable suggestions.</p>
+              <div className="field-grid onboarding-field-grid">
+                <div className="onboarding-height-field">
+                  <HeightPicker
+                    invalid={hasPageError("height")}
+                    onChange={(value) => update("height", value)}
+                    preferredUnit={draft.unit}
                     value={draft.height}
-                    onChange={(event) => update("height", event.target.value)}
-                    placeholder="e.g. 175 cm or 5 ft 9 in"
                   />
-                  <span className="field-help">Use centimeters or feet and inches.</span>
-                </label>
-                <label className="field"><span>Activity level</span><select aria-invalid={hasPageError("activity") || undefined} value={draft.activity} onChange={(event) => update("activity", event.target.value)}><option value="low">Mostly seated</option><option value="light">Lightly active</option><option value="moderate">Moderately active</option><option value="high">Highly active</option></select></label>
-                <label className="field"><span>Strength training days / week</span><input type="number" min="0" max="7" aria-invalid={hasPageError("trainingDays") || undefined} value={draft.trainingDays} onChange={(event) => update("trainingDays", event.target.value)} /></label>
+                </div>
+                <label className="field"><span>Activity level</span><select id="onboarding-activity" aria-invalid={hasPageError("activity") || undefined} value={draft.activity} onChange={(event) => update("activity", event.target.value)}><option value="low">Mostly seated</option><option value="light">Lightly active</option><option value="moderate">Moderately active</option><option value="high">Highly active</option></select></label>
+                <label className="field"><span>Strength training days / week</span><input id="onboarding-training-days" type="number" min="0" max="7" aria-invalid={hasPageError("trainingDays") || undefined} value={draft.trainingDays} onChange={(event) => update("trainingDays", event.target.value)} /></label>
                 <label className="field">
                   <span>IANA time zone</span>
                   <input
+                    id="onboarding-time-zone"
                     aria-invalid={hasPageError("timeZone") || undefined}
                     list="onboarding-time-zones"
                     value={draft.timeZone}
@@ -1275,8 +2231,8 @@ export function OnboardingFlow({
                     Detected automatically when possible. You can enter any valid IANA zone.
                   </span>
                 </label>
-                <label className="field"><span>Allergies</span><input value={draft.allergies} onChange={(event) => update("allergies", event.target.value)} placeholder="Hard exclusions" /></label>
-                <label className="field"><span>Dietary restrictions</span><input value={draft.restrictions} onChange={(event) => update("restrictions", event.target.value)} /></label>
+                <label className="field"><span>Allergies</span><input id="onboarding-allergies" aria-invalid={hasPageError("allergies") || undefined} value={draft.allergies} onChange={(event) => update("allergies", event.target.value)} placeholder="Hard exclusions" /></label>
+                <label className="field"><span>Dietary restrictions</span><input id="onboarding-restrictions" aria-invalid={hasPageError("restrictions") || undefined} value={draft.restrictions} onChange={(event) => update("restrictions", event.target.value)} /></label>
               </div>
               <fieldset style={{ border: 0, margin: "1.5rem 0 0", padding: 0 }}>
                 <legend className="field-label">Optional safety context</legend>
@@ -1311,25 +2267,25 @@ export function OnboardingFlow({
           {step === 6 ? (
             <>
               <p className="eyebrow">Step 6 of 6</p>
-              <h1>Congratulations — your account and profile are ready. Let’s build your plan.</h1>
+              <h1 id="onboarding-step-heading" tabIndex={-1}>Congratulations — your account and profile are ready. Let’s build your plan.</h1>
               <p>Review what you provided, what the app calculates, and exactly what may be sent to the selected AI provider.</p>
               <div className="settings-content">
                 <section className="card">
-                  <div className="card-title"><div><h2>Meals</h2><p>Provided by you</p></div><button className="text-link" onClick={() => goToStep(3)} type="button">Edit</button></div>
+                  <div className="card-title"><div><h2>Meals</h2><p>Provided by you</p></div><button className="text-link" disabled={completionPhase !== null} onClick={() => goToStep(3)} type="button">Edit</button></div>
                   <p className="field-help">{(["breakfast", "lunch", "dinner"] as Meal[]).map((meal) => `${meal}: ${draft.meals[meal].length} foods`).join(" · ")}</p>
                 </section>
                 <section className="card">
-                  <div className="card-title"><div><h2>Goal and timeline</h2><p>Provided by you + calculated by the app</p></div><button className="text-link" onClick={() => goToStep(4)} type="button">Edit</button></div>
+                  <div className="card-title"><div><h2>Goal and timeline</h2><p>Provided by you + calculated by the app</p></div><button className="text-link" disabled={completionPhase !== null} onClick={() => goToStep(4)} type="button">Edit</button></div>
                   <p className="field-help">{draft.goalType.replace("_", " ")} · {draft.currentWeight || "Missing"} {draft.unit} → {draft.targetWeight || "Missing"} {draft.unit} · {draft.targetDate || "No target date"}</p>
                 </section>
                 <section className="card">
-                  <div className="card-title"><div><h2>Lifestyle, restrictions, and warnings</h2><p>Provided by you</p></div><button className="text-link" onClick={() => goToStep(5)} type="button">Edit</button></div>
-                  <p className="field-help">Activity: {draft.activity} · Allergies: {draft.allergies || "none provided"} · Restrictions: {draft.restrictions || "none provided"} · Safety flags: {draft.safety.length}</p>
+                  <div className="card-title"><div><h2>Lifestyle, restrictions, and warnings</h2><p>Provided by you</p></div><button className="text-link" disabled={completionPhase !== null} onClick={() => goToStep(5)} type="button">Edit</button></div>
+                  <p className="field-help">Height: {draft.height || "missing"} · Activity: {draft.activity} · Allergies: {draft.allergies || "none provided"} · Restrictions: {draft.restrictions || "none provided"} · Safety flags: {draft.safety.length}</p>
                 </section>
                 <section className="card">
                   <div className="card-title"><div><h2>Sent for plan generation</h2><p>Only after you choose Generate my plan</p></div></div>
                   <ul style={{ color: "var(--ink-soft)", fontSize: ".82rem", paddingLeft: "1.2rem" }}>
-                    <li>Age, optional gender and height, preferred unit, and time zone.</li>
+                    <li>Age, optional gender, confirmed height, preferred unit, and time zone.</li>
                     <li>Start/latest/target weights, goal, target date, activity, and training.</li>
                     <li>Exact verified food names and catalog IDs, including brand, product, and flavor names when selected; plus allergies, restrictions, and acknowledged warnings.</li>
                     <li>App-calculated ranges and safety flags. Passwords and raw OTP codes are never included.</li>
@@ -1337,7 +2293,7 @@ export function OnboardingFlow({
                 </section>
               </div>
               <label className="checkbox-row" style={{ marginTop: "1.2rem" }}>
-                <input type="checkbox" aria-invalid={hasPageError("confirmation") || undefined} checked={confirmed} onChange={(event) => { setPageErrors([]); setConfirmed(event.target.checked); }} />
+                <input id="onboarding-confirmation" type="checkbox" disabled={completionPhase !== null} aria-invalid={hasPageError("confirmation") || undefined} checked={confirmed} onChange={(event) => { setPageErrors([]); setApiError(null); setApiErrorContext(null); setConfirmed(event.target.checked); }} />
                 <span>I have reviewed this information and want to complete onboarding.</span>
               </label>
               <div className="disclaimer">
@@ -1345,7 +2301,7 @@ export function OnboardingFlow({
                 Individual needs can vary. Consult a qualified healthcare professional or registered dietitian when appropriate.
               </div>
               <div className="onboarding-actions">
-                <button className="button button-quiet" type="button" onClick={() => goToStep(5)}><ArrowLeft size={17} /> Back</button>
+                <button className="button button-quiet" disabled={completionPhase !== null} type="button" onClick={() => goToStep(5)}><ArrowLeft size={17} /> Back</button>
                 <div>
                   <button className="button button-quiet" disabled={pending || exitPending} type="button" onClick={() => finish(false)}>Go to Today</button>
                   <button className="button button-dark" disabled={pending || exitPending} type="button" onClick={() => finish(true)}>{completionPhase === "saving" ? "Saving profile…" : completionPhase === "generating" ? "Generating plan…" : "Generate my plan"} <ArrowRight size={17} /></button>
@@ -1353,6 +2309,7 @@ export function OnboardingFlow({
               </div>
             </>
           ) : null}
+          </div>
         </div>
       </main>
 

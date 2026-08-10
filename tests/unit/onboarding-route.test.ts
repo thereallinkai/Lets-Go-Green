@@ -38,7 +38,7 @@ function completionBody(overrides: Record<string, unknown> = {}) {
     unit: "kg",
     goalType: "muscle_gain",
     targetDate: "2099-01-01",
-    height: "",
+    height: "175",
     activity: "high",
     trainingDays: "4",
     restrictions: "",
@@ -165,6 +165,22 @@ describe("PUT onboarding route", () => {
       status: 503,
       apiCode: "ONBOARDING_DATABASE_OUTDATED",
     },
+    {
+      databaseError: {
+        code: "40001",
+        message: "could not serialize access due to concurrent update",
+      },
+      status: 409,
+      apiCode: "ONBOARDING_SAVE_CONFLICT",
+    },
+    {
+      databaseError: {
+        code: "57014",
+        message: "canceling statement due to statement timeout",
+      },
+      status: 503,
+      apiCode: "ONBOARDING_SAVE_TIMEOUT",
+    },
   ])(
     "maps $apiCode without exposing database details",
     async ({ databaseError, status, apiCode }) => {
@@ -178,6 +194,10 @@ describe("PUT onboarding route", () => {
 
       expect(response.status).toBe(status);
       expect(result.error.code).toBe(apiCode);
+      expect(result.error.details).toEqual(expect.any(String));
+      expect(result.error.action).toEqual(
+        expect.objectContaining({ label: expect.any(String) }),
+      );
       expect(result.error.message).not.toContain(databaseError.message);
       expect(routeState.rpc).toHaveBeenCalledTimes(1);
     },
@@ -194,5 +214,27 @@ describe("PUT onboarding route", () => {
     expect(response.status).toBe(422);
     expect(result.error.code).toBe("INVALID_CURRENT_WEIGHT");
     expect(routeState.rpc).not.toHaveBeenCalled();
+  });
+
+  it("requires height before attempting final persistence", async () => {
+    const response = await PUT(completionRequest({ height: "" }));
+    const result = await response.json();
+
+    expect(response.status).toBe(422);
+    expect(result.error).toMatchObject({
+      code: "MISSING_HEIGHT",
+      action: { href: "/onboarding?step=5" },
+    });
+    expect(routeState.rpc).not.toHaveBeenCalled();
+  });
+
+  it("treats a missing completion result as a failed save", async () => {
+    routeState.rpc.mockResolvedValueOnce({ data: null, error: null });
+
+    const response = await PUT(completionRequest());
+    const result = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(result.error.code).toBe("ONBOARDING_SAVE_FAILED");
   });
 });
