@@ -50,6 +50,7 @@ insert into public.profiles (
   user_id,
   full_name,
   date_of_birth,
+  height_cm,
   time_zone,
   onboarding_status,
   onboarding_completed_at
@@ -59,6 +60,7 @@ values
     'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     'User A',
     (current_date - interval '30 years')::date,
+    175,
     'UTC',
     'completed',
     now()
@@ -67,6 +69,7 @@ values
     'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
     'User B',
     (current_date - interval '35 years')::date,
+    165,
     'UTC',
     'completed',
     now()
