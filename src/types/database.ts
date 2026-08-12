@@ -1269,14 +1269,11 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      accept_plan: { Args: { target_plan_id: string }; Returns: string }
       abandon_food_label_upload: {
-        Args: {
-          target_reservation_token: string
-          target_user_id: string
-        }
+        Args: { target_reservation_token: string; target_user_id: string }
         Returns: boolean
       }
+      accept_plan: { Args: { target_plan_id: string }; Returns: string }
       add_daily_meal_item: {
         Args: {
           checkin_date: string
@@ -1332,10 +1329,7 @@ export type Database = {
         Returns: string
       }
       complete_food_label_object_cleanup: {
-        Args: {
-          target_object_path: string
-          target_user_id: string
-        }
+        Args: { target_object_path: string; target_user_id: string }
         Returns: boolean
       }
       complete_onboarding: {
@@ -1418,10 +1412,7 @@ export type Database = {
         }[]
       }
       mark_food_label_upload_stored: {
-        Args: {
-          target_reservation_token: string
-          target_user_id: string
-        }
+        Args: { target_reservation_token: string; target_user_id: string }
         Returns: boolean
       }
       pending_food_label_object_cleanup: {
@@ -1436,13 +1427,6 @@ export type Database = {
           food_id: string
         }[]
       }
-      record_external_food_lookup: {
-        Args: {
-          lookup_provider: Database["public"]["Enums"]["food_source_provider"]
-          target_user_id: string
-        }
-        Returns: boolean
-      }
       preflight_food_label_upload: {
         Args: {
           target_image_kind: Database["public"]["Enums"]["food_label_image_kind"]
@@ -1454,6 +1438,13 @@ export type Database = {
           preflight_token: string
           rate_limited: boolean
         }[]
+      }
+      record_external_food_lookup: {
+        Args: {
+          lookup_provider: Database["public"]["Enums"]["food_source_provider"]
+          target_user_id: string
+        }
+        Returns: boolean
       }
       repair_verified_profile: { Args: never; Returns: Json }
       reserve_plan_generation: {
