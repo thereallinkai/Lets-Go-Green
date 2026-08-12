@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { apiError, apiSuccess } from "@/src/lib/api-response";
+import { isAuthSessionMissing } from "@/src/lib/auth-error-taxonomy";
 import { isValidIanaTimeZone } from "@/src/lib/domain";
 import { isDevelopmentDemo } from "@/src/lib/env";
 import { createSupabaseServerClient } from "@/src/lib/supabase/server";
@@ -82,7 +83,19 @@ export async function PATCH(request: Request) {
   try {
     const supabase = await createSupabaseServerClient();
     const { data: auth, error: authError } = await supabase.auth.getUser();
-    if (authError || !auth.user) {
+    if (authError && !isAuthSessionMissing(authError)) {
+      return apiError(
+        "SETTINGS_AUTH_UNAVAILABLE",
+        "Your session could not be checked before saving settings.",
+        503,
+        {
+          details: "No settings were changed. Check the connection and try again.",
+          retryable: true,
+          action: { kind: "retry", label: "Try saving again" },
+        },
+      );
+    }
+    if (!auth.user || isAuthSessionMissing(authError)) {
       return apiError(
         "SESSION_EXPIRED",
         "Log in again before saving settings.",
@@ -93,22 +106,26 @@ export async function PATCH(request: Request) {
     if (parsed.data.section === "profile") {
       const { data: profile, error } = await supabase
         .from("profiles")
-        .upsert(
-          {
-            user_id: auth.user.id,
-            full_name: parsed.data.fullName,
-            preferred_weight_unit: parsed.data.preferredWeightUnit,
-            time_zone: parsed.data.timeZone,
-          },
-          { onConflict: "user_id" },
-        )
+        .update({
+          full_name: parsed.data.fullName,
+          preferred_weight_unit: parsed.data.preferredWeightUnit,
+          time_zone: parsed.data.timeZone,
+        })
+        .eq("user_id", auth.user.id)
         .select("full_name,preferred_weight_unit,time_zone")
-        .single();
+        .maybeSingle();
       if (error) {
         return apiError(
           "PROFILE_SAVE_FAILED",
           "Profile settings could not be saved.",
           500,
+        );
+      }
+      if (!profile) {
+        return apiError(
+          "PROFILE_REQUIRED",
+          "Complete profile setup before saving profile settings.",
+          409,
         );
       }
 

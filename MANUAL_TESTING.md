@@ -68,7 +68,7 @@ software directly on your computer.
 
     ```dotenv
     USDA_FDC_API_KEY=
-    FOOD_LOOKUP_USER_AGENT=LetsGoGreen/1.0.0-beta.3 (https://github.com/thereallinkai/Lets-Go-Green)
+    FOOD_LOOKUP_USER_AGENT=LetsGoGreen/1.0.0-beta.4 (https://github.com/thereallinkai/Lets-Go-Green)
     ```
 
     Restart `npm run dev:all` after changing environment values. Open Food Facts
@@ -98,11 +98,12 @@ server. Then run:
 npm run verify
 ```
 
-Expected: type checking, lint, every currently discovered unit/component test,
-database/RLS tests, generated database-type drift detection, the production
-build, every currently discovered Playwright test, responsive checks, and
-serious/critical axe checks all pass. Record the counts printed by this checkout
-instead of relying on a stale hard-coded total.
+Expected: the high-severity dependency audit, type checking, lint, every
+currently discovered unit/component test, database/RLS tests, generated
+database-type drift detection, the production build, every currently discovered
+Playwright test, responsive checks, and serious/critical axe checks all pass.
+Record the counts printed by this checkout instead of relying on a stale
+hard-coded total.
 
 Restart the application with `npm run dev:all` after this command finishes.
 
@@ -118,6 +119,7 @@ npm run test:db
 npm run test:e2e
 npm run test:e2e:ui
 npm run db:types:check
+npm run audit:security
 npm run build
 ```
 
@@ -224,6 +226,20 @@ presented as read-only and the displayed age is derived from it. The review
 screen may identify the derived age as an AI input, but must not list or send
 the raw date of birth. Near a local-date boundary, the confirmed and displayed
 age must use the same saved time zone rather than changing at UTC midnight.
+
+Verification recovery:
+
+- [ ] In a controlled lost-response case, allow verification to complete on
+  the server but interrupt its browser response. Retrying with the same email
+  detects the matching authenticated session and continues without asking the
+  user to register again or exposing another account.
+- [ ] In a controlled verified-profile-hook failure, **Check profile setup
+  again** invokes the authenticated repair path, derives the immutable
+  registration fields from that same verified account, creates only the exact
+  recorded Terms/Privacy versions, and proceeds without changing the DOB.
+- [ ] A transient profile lookup or Auth outage keeps the verified-session
+  recovery action available and shows a retryable safe code; it does not consume
+  another code, resend automatically, or expose provider diagnostics.
 
 Resend behavior:
 
@@ -370,6 +386,15 @@ Use a future target date for the main path.
 - [ ] Accepting that first draft is a separate, deliberate action.
 - [ ] Refreshing or signing out and back in resumes or preserves the completed
   state.
+- [ ] Interrupt the browser after the completion request commits but before its
+  response or generated plan arrives. Reloading Step 6 reuses the same scoped
+  completion/generation key and inputs; an exact completion replay returns the
+  original goal without changing profile, goal, baseline, or preference
+  timestamps.
+- [ ] In a controlled request, change a material field after completion and
+  replay the completion RPC. It returns `ONBOARDING_ALREADY_COMPLETED`, leaves
+  every persisted row unchanged, and directs the user to Today instead of
+  replacing completed setup.
 - [ ] After first completion, the optional tutorial opens unless it was already
   completed for this account or skipped for the current browser session.
 
@@ -419,10 +444,24 @@ source-reported data, not proof that the nutrition is correct.
   record identified by provider plus external ID.
 - [ ] The record exposes all provider-reported nutrients and preserves its
   measurement basis.
+- [ ] An Open Food Facts fixture with `sodium_100g: 0.2` and a raw-entry unit of
+  `mg` displays 200 mg sodium per 100 g; vitamin D and other micronutrients are
+  likewise converted from the provider's normalized `_100g` values rather than
+  from the contributor's raw-entry unit.
+- [ ] A liquid Open Food Facts result is labeled **Per 100 mL** in search. Its
+  import is rejected as `FOOD_SOURCE_REFERENCE_UNIT_UNSUPPORTED` before any
+  catalog write, explains the gram-based plan limitation, and directs the user
+  to another result or a label with a serving weight in grams.
 - [ ] The imported record is labeled `pending_review` / source reported and is
   disabled for generated-plan preferences.
 - [ ] Reimporting the same provider identifier reuses the existing record rather
   than creating a duplicate.
+- [ ] Reimport a pending source record after removing one provider category.
+  The stale source-derived category disappears; a reviewed or owner-private
+  record is never rewritten by this cleanup.
+- [ ] A controlled malformed saved-catalog row or invalid total count fails the
+  complete response with a retryable catalog compatibility error. It is not
+  silently dropped from an otherwise successful `200` response.
 - [ ] If the saved-food refresh fails before an import, the app reports
   `SAVED_FOOD_SEARCH_FAILED`, keeps the current results visible, and retries only
   the saved-food search.
@@ -480,6 +519,13 @@ afterward.
 - [ ] Uploading a replacement nutrition image leaves one current metadata row
   and one current private object for that evidence kind; the previous object is
   removed after the replacement is safely recorded.
+- [ ] Start two concurrent replacements for the same evidence kind. Only the
+  newest valid reservation can become current; the losing or superseded object
+  is queued for cleanup and cannot overwrite the winner.
+- [ ] Interrupt once after upload and once after database finalization, then
+  retry. A stored-but-unfinalized object and a replaced object are recovered by
+  the private cleanup queue, and cleanup never removes an object still
+  referenced by current image metadata.
 - [ ] More than 20 image attempts for one account in 24 hours returns a neutral
   rate-limit message before another image is processed.
 - [ ] In local Supabase Studio, the `food-labels` bucket is private, the stored
@@ -578,6 +624,9 @@ Tutorial case:
   Profile route does not need a sixth bottom-navigation item.
 - [ ] Refreshing any protected page keeps the authenticated session.
 - [ ] **Log out** in Settings returns to `/login`.
+- [ ] In a controlled provider failure, logout remains on the protected page,
+  shows `LOGOUT_FAILED` with a retry action, and does not claim success while a
+  session cookie may remain.
 - [ ] After logout, the browser Back button cannot reveal protected account
   data; a reload redirects to login.
 - [ ] A valid login redirects an incomplete account to onboarding and a
@@ -625,6 +674,10 @@ Versioning:
 
    - [ ] Accepted, draft, and superseded states are distinguishable.
    - [ ] Review a superseded version.
+   - [ ] After changing the current goal or onboarding baseline in a controlled
+     fixture, the superseded plan still shows the start and target weights
+     stored in that plan's immutable input snapshot; unsafe or out-of-range
+     snapshot values fall back to trusted database values.
    - [ ] **Keep current accepted plan** changes nothing.
    - [ ] **Restore as accepted plan** makes only that reviewed version current.
 
@@ -672,6 +725,12 @@ must restore or retain the preceding state and announce that nothing was saved.
 Go online and confirm subsequent actions persist. Attempts to write a future
 local date or another user's item must fail closed.
 
+In controlled API cases, an unavailable Auth service reports
+`CHECKIN_AUTH_UNAVAILABLE`, a failed time-zone profile lookup reports
+`CHECKIN_PROFILE_UNAVAILABLE`, and a genuinely missing session reports
+`SESSION_EXPIRED`. No write may silently substitute UTC or claim the user was
+logged out during a retryable outage.
+
 ## 12. Calendar
 
 - [ ] Previous/next month buttons load the requested month.
@@ -708,6 +767,9 @@ and confirm the prior state is restored. Return online afterward.
 - [ ] Refreshing preserves the entry.
 - [ ] **Edit** loads the selected value; **Cancel edit** makes no change;
   **Save changes** persists the edit.
+- [ ] The onboarding baseline is visibly labeled and has no edit or delete
+  control. Direct API or authenticated table attempts to alter/remove it return
+  the protected-baseline error, while ordinary later entries remain editable.
 - [ ] **Delete** opens a confirmation dialog.
 - [ ] **Keep entry** cancels deletion; **Delete entry** removes it and the
   removal persists.
@@ -764,6 +826,9 @@ the previous history is restored. Return online afterward.
 ### Profile and goal
 
 - [ ] Full name, kg/lb preference, and a valid IANA time zone save and persist.
+- [ ] Saving an existing profile still works after direct profile inserts are
+  revoked; a genuinely missing verified profile reports `PROFILE_REQUIRED`
+  instead of creating a weaker row through an upsert.
 - [ ] An invalid IANA time zone is rejected. Editing the time zone uses no
   location permission and does not overwrite a deliberate saved value on every
   refresh.
@@ -803,6 +868,8 @@ case in section 7.
 - [ ] The export does not embed raw label-photo bytes or a public storage URL.
 - [ ] The export contains no password, OTP, session token, service key, or other
   user's data.
+- [ ] `npm run audit:security` reports zero high- or critical-severity
+  advisories, and CI runs the same gate before tests and build.
 - [ ] **Delete account** is disabled and explicitly says the feature is
   currently unavailable.
 

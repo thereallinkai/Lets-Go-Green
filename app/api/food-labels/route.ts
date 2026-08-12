@@ -1,4 +1,5 @@
 import { apiError, apiSuccess } from "@/src/lib/api-response";
+import { isAuthSessionMissing } from "@/src/lib/auth-error-taxonomy";
 import { foodLabelDataSchema } from "@/src/lib/domain/food-label";
 import { isDevelopmentDemo } from "@/src/lib/env";
 import { createSupabaseServerClient } from "@/src/lib/supabase/server";
@@ -36,7 +37,7 @@ export async function GET() {
   try {
     const supabase = await createSupabaseServerClient();
     const { data: auth, error: authError } = await supabase.auth.getUser();
-    if (authError) {
+    if (authError && !isAuthSessionMissing(authError)) {
       return apiError(
         "LABEL_AUTH_UNAVAILABLE",
         "Your session could not be checked for label uploads.",
@@ -48,7 +49,7 @@ export async function GET() {
         },
       );
     }
-    if (!auth.user) {
+    if (!auth.user || isAuthSessionMissing(authError)) {
       return apiError("SESSION_EXPIRED", "Log in to view label uploads.", 401, {
         retryable: false,
         action: { kind: "navigate", label: "Log in", href: "/login" },
@@ -121,7 +122,7 @@ export async function POST(request: Request) {
   try {
     const supabase = await createSupabaseServerClient();
     const { data: auth, error: authError } = await supabase.auth.getUser();
-    if (authError) {
+    if (authError && !isAuthSessionMissing(authError)) {
       return apiError(
         "LABEL_AUTH_UNAVAILABLE",
         "Your session could not be checked for label upload.",
@@ -134,7 +135,7 @@ export async function POST(request: Request) {
         },
       );
     }
-    if (!auth.user) {
+    if (!auth.user || isAuthSessionMissing(authError)) {
       return apiError("SESSION_EXPIRED", "Log in before uploading a label.", 401, {
         details: "No draft was created. Your current form remains in this browser.",
         retryable: false,

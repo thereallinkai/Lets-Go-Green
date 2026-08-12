@@ -69,6 +69,21 @@ export function apiErrorFromPayload(
   };
 }
 
+export async function apiErrorFromResponse(
+  response: { json?: () => Promise<unknown> },
+  fallback: ApiError,
+) {
+  const payload =
+    typeof response.json === "function"
+      ? await response.json().catch(() => null)
+      : null;
+  return apiErrorFromPayload(payload, fallback);
+}
+
+export function apiErrorFromThrown(error: unknown, fallback: ApiError) {
+  return apiErrorFromPayload({ error }, fallback);
+}
+
 export function clientApiError(
   code: string,
   message: string,

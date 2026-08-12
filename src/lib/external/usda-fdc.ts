@@ -139,6 +139,7 @@ export async function searchUsdaFoods(
         dataType: text(food.dataType),
         imageUrl: null,
         nutritionImageUrl: null,
+        nutritionReferenceUnit: "g",
         nutritionPreview: nutrientPreview(food),
       },
     ];

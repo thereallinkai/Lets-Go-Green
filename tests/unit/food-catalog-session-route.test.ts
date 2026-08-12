@@ -3,7 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const routeState = vi.hoisted(() => ({
   authResult: {
     data: { user: { id: "user-1" } as { id: string } | null },
-    error: null as { code?: string; message?: string } | null,
+    error: null as {
+      code?: string;
+      message?: string;
+      name?: string;
+      status?: number;
+    } | null,
   },
   rpcResult: {
     data: [] as unknown,
@@ -45,6 +50,30 @@ function request(query = "oats") {
   return new Request(
     `http://localhost/api/foods?q=${encodeURIComponent(query)}`,
   );
+}
+
+function catalogRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "11111111-1111-4111-8111-111111111111",
+    slug: "rolled-oats",
+    english_name: "Rolled oats",
+    icon_ref: null,
+    verification_status: "verified",
+    ownership_type: "catalog",
+    food_kind: "generic",
+    catalog_status: "active",
+    brand_name: null,
+    product_name: null,
+    variant_name: null,
+    gtin: null,
+    package_description: null,
+    categories: ["Carbohydrate"],
+    nutrition: null,
+    source: null,
+    plan_eligible: true,
+    total_count: 1,
+    ...overrides,
+  };
 }
 
 describe("food catalog session handling", () => {
@@ -96,6 +125,24 @@ describe("food catalog session handling", () => {
     expect(result.error.details).toEqual(expect.any(String));
   });
 
+  it("treats auth-js AuthSessionMissingError as a signed-out session", async () => {
+    routeState.authResult = {
+      data: { user: null },
+      error: {
+        name: "AuthSessionMissingError",
+        status: 400,
+        message: "Auth session missing!",
+      },
+    };
+
+    const response = await GET(request());
+    const result = await response.json();
+
+    expect(response.status).toBe(401);
+    expect(result.error.code).toBe("SESSION_EXPIRED");
+    expect(routeState.rpc).not.toHaveBeenCalled();
+  });
+
   it("returns a safe retry envelope for a catalog database failure", async () => {
     routeState.rpcResult = {
       data: null,
@@ -129,6 +176,64 @@ describe("food catalog session handling", () => {
     });
     expect(result.error.details).toEqual(expect.any(String));
     expect(JSON.stringify(result)).not.toContain("private transport");
+  });
+
+  it("fails closed instead of silently omitting malformed catalog rows", async () => {
+    routeState.rpcResult = {
+      data: [
+        catalogRow({ total_count: 2 }),
+        { id: "malformed-private-row", total_count: 2 },
+      ],
+      error: null,
+    };
+
+    const response = await GET(request());
+    const result = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(result.error).toMatchObject({
+      code: "FOOD_CATALOG_RESPONSE_INVALID",
+      retryable: true,
+      action: { kind: "retry", label: "Try search again" },
+    });
+    expect(JSON.stringify(result)).not.toContain("malformed-private-row");
+    expect(response.headers.get("X-Total-Count")).toBeNull();
+  });
+
+  it("fails closed when the catalog RPC returns a non-array payload", async () => {
+    routeState.rpcResult = { data: { unexpected: true }, error: null };
+
+    const response = await GET(request());
+    const result = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(result.error.code).toBe("FOOD_CATALOG_RESPONSE_INVALID");
+  });
+
+  it("fails closed when the catalog total count is malformed", async () => {
+    routeState.rpcResult = {
+      data: [catalogRow({ total_count: "not-a-count" })],
+      error: null,
+    };
+
+    const response = await GET(request());
+    const result = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(result.error.code).toBe("FOOD_CATALOG_RESPONSE_INVALID");
+    expect(response.headers.get("X-Total-Count")).toBeNull();
+  });
+
+  it("does not claim zero total matches for an empty page past the end", async () => {
+    routeState.rpcResult = { data: [], error: null };
+
+    const response = await GET(
+      new Request("http://localhost/api/foods?q=oats&limit=10&offset=30"),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ data: [], error: null });
+    expect(response.headers.get("X-Total-Count")).toBeNull();
   });
 
   it.each(["client creation", "session lookup"])(

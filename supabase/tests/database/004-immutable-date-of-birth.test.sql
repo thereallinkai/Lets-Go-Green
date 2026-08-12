@@ -251,7 +251,7 @@ select throws_ok(
   'the Auth registration time zone is write-once'
 );
 
-select throws_ok(
+select lives_ok(
   $$
     update auth.users
     set email_confirmed_at = now()
@@ -292,9 +292,9 @@ select throws_ok(
       'Missing DOB profile'
     )
   $$,
-  '23514',
-  'Date of birth is required for new profiles.',
-  'a direct new profile insert cannot omit DOB'
+  '42501',
+  'permission denied for table profiles',
+  'authenticated clients cannot create a profile without DOB through direct insert'
 );
 
 select throws_ok(
@@ -311,9 +311,9 @@ select throws_ok(
       'UTC'
     )
   $$,
-  '23514',
-  'Date of birth must represent an age from 13 to 120.',
-  'a direct profile insert cannot bypass the age range'
+  '42501',
+  'permission denied for table profiles',
+  'authenticated clients cannot choose an underage DOB through direct insert'
 );
 
 select throws_ok(
@@ -330,9 +330,9 @@ select throws_ok(
       'Mars/Olympus_Mons'
     )
   $$,
-  '23514',
-  'A valid IANA time zone is required with date of birth.',
-  'a direct profile insert cannot bypass time-zone validation'
+  '42501',
+  'permission denied for table profiles',
+  'authenticated clients cannot choose profile identity fields through direct insert'
 );
 
 reset role;
@@ -349,7 +349,7 @@ values (
   'UTC'
 );
 
-select lives_ok(
+select throws_ok(
   $$
     update auth.users
     set email_confirmed_at = now()
@@ -444,7 +444,7 @@ select set_config(
 );
 set local role authenticated;
 
-select lives_ok(
+select throws_ok(
   $$
     insert into public.profiles (
       user_id,
@@ -458,17 +458,19 @@ select lives_ok(
       'UTC'
     )
   $$,
-  'a direct profile insert with valid DOB and time zone is accepted'
+  '42501',
+  'permission denied for table profiles',
+  'even a valid-looking authenticated direct profile insert is denied'
 );
 
 select is(
   (
-    select age
+    select count(*)
     from public.profiles
     where user_id = '88888888-8888-4888-8888-888888888888'
   ),
-  30::smallint,
-  'a valid direct profile age is derived by the database'
+  0::bigint,
+  'the denied direct insert creates no profile'
 );
 
 reset role;

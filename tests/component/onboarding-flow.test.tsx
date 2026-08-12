@@ -272,12 +272,60 @@ describe("OnboardingFlow navigation and restoration", () => {
       ).toBeInTheDocument();
       await waitFor(() => {
         expect(
-          screen.getByText(/browser storage unavailable/i),
+          screen.getByText(/browser storage and account sync unavailable/i),
         ).toBeInTheDocument();
       });
     } finally {
       storageGetter.mockRestore();
     }
+  });
+
+  it("waits until verification supplies an account scope before loading its draft", async () => {
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/onboarding") && !init?.method) {
+          return jsonResponse({
+            data: { currentStep: null, draft: null, updatedAt: null },
+            error: null,
+          });
+        }
+        if (url.endsWith("/api/onboarding") && init?.method === "PATCH") {
+          return jsonResponse({ data: { saved: true }, error: null });
+        }
+        return jsonResponse({ data: [], error: null });
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { rerender } = render(
+      <OnboardingFlowComponent initialStep={2} draftOwnerKey={null} />,
+    );
+
+    await screen.findByRole("heading", { name: "Check your email." });
+    await new Promise((resolve) => window.setTimeout(resolve, 25));
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          String(input).endsWith("/api/onboarding") && !init?.method,
+      ),
+    ).toBe(false);
+    expect(
+      screen.queryByText("Account progress could not be loaded."),
+    ).not.toBeInTheDocument();
+
+    rerender(
+      <OnboardingFlowComponent initialStep={2} draftOwnerKey="verified-user" />,
+    );
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([input, init]) =>
+            String(input).endsWith("/api/onboarding") && !init?.method,
+        ),
+      ).toBe(true);
+    });
   });
 
   it.each([
@@ -486,6 +534,249 @@ describe("OnboardingFlow navigation and restoration", () => {
         { selector: "[aria-live]" },
       ),
     ).toBeInTheDocument();
+  });
+
+  it("retries a temporary verification failure with the same code instead of resending", async () => {
+    const verificationBodies: Array<Record<string, unknown>> = [];
+    let verificationCount = 0;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/auth/verify") && init?.method === "POST") {
+          verificationBodies.push(JSON.parse(String(init.body)));
+          verificationCount += 1;
+          return verificationCount === 1
+            ? jsonResponse(
+                {
+                  data: null,
+                  error: {
+                    code: "VERIFICATION_UNAVAILABLE",
+                    message: "Email verification could not be completed.",
+                    details: "Try the same verification again.",
+                    retryable: true,
+                    action: { kind: "retry", label: "Try again" },
+                  },
+                },
+                503,
+              )
+            : jsonResponse({
+                data: {
+                  verified: true,
+                  profileReady: true,
+                  redirectTo: "/onboarding?step=3",
+                },
+                error: null,
+              });
+        }
+        if (url.endsWith("/api/onboarding") && init?.method === "PATCH") {
+          return jsonResponse({ data: { saved: true }, error: null });
+        }
+        if (url.endsWith("/api/onboarding")) {
+          return jsonResponse({
+            data: { currentStep: null, draft: null, updatedAt: null },
+            error: null,
+          });
+        }
+        if (url.endsWith("/api/foods")) {
+          return jsonResponse({ data: [], error: null });
+        }
+        return jsonResponse({ data: null, error: null });
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(
+      <OnboardingFlow
+        email="jamie@example.test"
+        initialStep={2}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: "Account email" })).toHaveValue(
+        "jamie@example.test",
+      );
+    });
+    for (const [index, digit] of [..."123456"].entries()) {
+      await user.type(screen.getByLabelText(`Digit ${index + 1}`), digit);
+    }
+    await user.click(
+      screen.getByRole("button", { name: "Verify and continue" }),
+    );
+
+    const retry = await screen.findByRole("button", { name: "Try again" });
+    expect(retry).toBeEnabled();
+    await user.click(retry);
+
+    await screen.findByRole("heading", { name: "What works on your plate?" });
+    expect(verificationBodies).toEqual([
+      { email: "jamie@example.test", token: "123456" },
+      { email: "jamie@example.test", token: "123456" },
+    ]);
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).endsWith("/api/auth/resend"),
+      ),
+    ).toBe(false);
+    expect(router.refresh).toHaveBeenCalled();
+  });
+
+  it("rechecks profile setup with the verified session after OTP success", async () => {
+    const verificationBodies: Array<Record<string, unknown>> = [];
+    let resumeCount = 0;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/auth/verify") && init?.method === "POST") {
+          const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+          verificationBodies.push(body);
+          if ("resume" in body) {
+            resumeCount += 1;
+            return resumeCount === 1
+              ? jsonResponse(
+                  {
+                    data: null,
+                    error: {
+                      code: "AUTH_NETWORK_ERROR",
+                      message: "The account service could not be reached.",
+                      details: "Check your connection and try again.",
+                      retryable: true,
+                      action: { kind: "retry", label: "Try again" },
+                    },
+                  },
+                  503,
+                )
+              : jsonResponse({
+                data: {
+                  verified: true,
+                  profileReady: true,
+                  redirectTo: "/onboarding?step=3",
+                },
+                error: null,
+              });
+          }
+          return jsonResponse(
+                {
+                  data: null,
+                  error: {
+                    code: "VERIFIED_PROFILE_STATUS_UNAVAILABLE",
+                    message:
+                      "Your email is verified, but profile setup could not be checked right now.",
+                    details: "Your verified session is active.",
+                    retryable: true,
+                    action: {
+                      kind: "retry",
+                      label: "Check profile setup again",
+                    },
+                  },
+                },
+                503,
+              );
+        }
+        if (url.endsWith("/api/onboarding") && init?.method === "PATCH") {
+          return jsonResponse({ data: { saved: true }, error: null });
+        }
+        if (url.endsWith("/api/onboarding")) {
+          return jsonResponse({
+            data: { currentStep: null, draft: null, updatedAt: null },
+            error: null,
+          });
+        }
+        if (url.endsWith("/api/foods")) {
+          return jsonResponse({ data: [], error: null });
+        }
+        return jsonResponse({ data: null, error: null });
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(
+      <OnboardingFlow
+        email="jamie@example.test"
+        initialStep={2}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: "Account email" })).toHaveValue(
+        "jamie@example.test",
+      );
+    });
+    for (const [index, digit] of [..."123456"].entries()) {
+      await user.type(screen.getByLabelText(`Digit ${index + 1}`), digit);
+    }
+    await user.click(
+      screen.getByRole("button", { name: "Verify and continue" }),
+    );
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Check profile setup again",
+      }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: /Use another account/ }),
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "Check profile setup again" }),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "Try again" }),
+    );
+
+    await screen.findByRole("heading", { name: "What works on your plate?" });
+    expect(verificationBodies).toEqual([
+      { email: "jamie@example.test", token: "123456" },
+      { resume: true },
+      { resume: true },
+    ]);
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).endsWith("/api/auth/resend"),
+      ),
+    ).toBe(false);
+  });
+
+  it("offers an explicit verified-session continuation after a reload", async () => {
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/auth/verify") && init?.method === "POST") {
+          expect(JSON.parse(String(init.body))).toEqual({ resume: true });
+          return jsonResponse({
+            data: {
+              verified: true,
+              profileReady: true,
+              redirectTo: "/onboarding?step=3",
+            },
+            error: null,
+          });
+        }
+        if (url.endsWith("/api/onboarding") && init?.method === "PATCH") {
+          return jsonResponse({ data: { saved: true }, error: null });
+        }
+        if (url.endsWith("/api/onboarding")) {
+          return jsonResponse({
+            data: { currentStep: null, draft: null, updatedAt: null },
+            error: null,
+          });
+        }
+        if (url.endsWith("/api/foods")) {
+          return jsonResponse({ data: [], error: null });
+        }
+        return jsonResponse({ data: null, error: null });
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<OnboardingFlow initialStep={2} />);
+
+    await user.click(
+      screen.getByRole("button", { name: "Continue account setup" }),
+    );
+
+    await screen.findByRole("heading", { name: "What works on your plate?" });
+    expect(router.refresh).toHaveBeenCalled();
   });
 });
 
@@ -1091,6 +1382,133 @@ describe("OnboardingFlow completion", () => {
       .idempotencyKey;
     expect(secondKey).not.toBe(firstKey);
   });
+
+  it("reuses the completed profile and generation key after a network failure and reload", async () => {
+    window.localStorage.setItem(
+      ONBOARDING_DRAFT_KEY,
+      JSON.stringify(completionDraft()),
+    );
+    let putCount = 0;
+    let generationCount = 0;
+    const generationBodies: Array<{ idempotencyKey: string }> = [];
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/onboarding") && init?.method === "PUT") {
+          putCount += 1;
+          return jsonResponse({
+            data: { completed: true, goalId: "goal-1" },
+            error: null,
+          });
+        }
+        if (url.endsWith("/api/onboarding") && init?.method === "PATCH") {
+          return jsonResponse({ data: { saved: true }, error: null });
+        }
+        if (url.endsWith("/api/onboarding")) {
+          return jsonResponse({
+            data: { currentStep: null, draft: null, updatedAt: null },
+            error: null,
+          });
+        }
+        if (url.endsWith("/api/foods")) {
+          return jsonResponse({
+            data: [
+              {
+                slug: "rolled-oats",
+                english_name: "Rolled oats",
+                categories: ["Carbohydrate", "Protein"],
+                plan_eligible: true,
+              },
+              {
+                slug: "chicken-breast",
+                english_name: "Chicken breast",
+                categories: ["Protein"],
+                plan_eligible: true,
+              },
+              {
+                slug: "broccoli",
+                english_name: "Broccoli",
+                categories: ["Vegetable"],
+                plan_eligible: true,
+              },
+            ],
+            error: null,
+          });
+        }
+        if (url.endsWith("/api/plans/generate") && init?.method === "POST") {
+          generationBodies.push(JSON.parse(String(init.body)));
+          generationCount += 1;
+          if (generationCount === 1) {
+            throw new TypeError("response was lost after request acceptance");
+          }
+          return jsonResponse(
+            {
+              data: {
+                requestId: "request-1",
+                planId: "plan-1",
+                status: "succeeded",
+                replayed: true,
+              },
+              error: null,
+            },
+            201,
+          );
+        }
+        return jsonResponse({ data: null, error: null });
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    const firstRender = render(<OnboardingFlow initialStep={6} />);
+
+    await screen.findByText("fat loss · 210 lb → 200 lb · 2026-08-31");
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "I have reviewed this information and want to complete onboarding.",
+      }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: /Generate my plan/ }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Plan generation could not start.",
+    );
+    const recovery = JSON.parse(
+      window.localStorage.getItem(ONBOARDING_DRAFT_KEY) ?? "{}",
+    ) as {
+      onboardingCompleted?: boolean;
+      generationKey?: string;
+      currentStep?: number;
+    };
+    expect(recovery).toMatchObject({
+      onboardingCompleted: true,
+      currentStep: 6,
+    });
+    expect(recovery.generationKey).toMatch(
+      /^[A-Za-z0-9._:-]{8,128}$/,
+    );
+    firstRender.unmount();
+
+    render(<OnboardingFlow initialStep={2} />);
+    await screen.findByText("fat loss · 210 lb → 200 lb · 2026-08-31");
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "I have reviewed this information and want to complete onboarding.",
+      }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: /Generate my plan/ }),
+    );
+
+    await waitFor(() => expect(router.push).toHaveBeenCalledWith("/plan"));
+    expect(putCount).toBe(1);
+    expect(generationBodies).toHaveLength(2);
+    expect(generationBodies[1]?.idempotencyKey).toBe(
+      generationBodies[0]?.idempotencyKey,
+    );
+    expect(window.localStorage.getItem(ONBOARDING_DRAFT_KEY)).toBeNull();
+  });
 });
 
 describe("OnboardingFlow error routing and draft resilience", () => {
@@ -1302,9 +1720,8 @@ describe("OnboardingFlow error routing and draft resilience", () => {
       ONBOARDING_DRAFT_KEY,
       JSON.stringify(completionDraft({ currentWeight: "82.5" })),
     );
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
         if (String(input).endsWith("/api/onboarding") && !init?.method) {
           return jsonResponse(
             {
@@ -1321,14 +1738,15 @@ describe("OnboardingFlow error routing and draft resilience", () => {
           );
         }
         if (init?.method === "PATCH") {
-          return new Promise<Response>(() => undefined);
+          return jsonResponse({ data: { saved: true }, error: null });
         }
         if (String(input).endsWith("/api/foods")) {
           return jsonResponse({ data: [], error: null });
         }
         return jsonResponse({ data: null, error: null });
-      }),
+      },
     );
+    vi.stubGlobal("fetch", fetchMock);
 
     render(<OnboardingFlow initialStep={4} />);
 
@@ -1338,6 +1756,7 @@ describe("OnboardingFlow error routing and draft resilience", () => {
     const notice = noticeHeading.closest("[role='status']");
     expect(notice).toHaveTextContent("Sync code: DRAFT_LOAD_FAILED");
     expect(screen.getByText("Saved in this browser only")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save and exit" })).toBeDisabled();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByLabelText("Current weight")).toHaveValue("82.5");
@@ -1348,10 +1767,157 @@ describe("OnboardingFlow error routing and draft resilience", () => {
       ),
     ).toEqual(
       expect.objectContaining({
-        version: 1,
-        draft: expect.objectContaining({ currentWeight: "82.5" }),
+        currentWeight: "82.5",
       }),
     );
+    await new Promise((resolve) => window.setTimeout(resolve, 550));
+    expect(
+      fetchMock.mock.calls.some(([, init]) => init?.method === "PATCH"),
+    ).toBe(false);
+  });
+
+  it("reloads an account draft after a failed empty-browser load before autosaving", async () => {
+    let loadCount = 0;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/onboarding") && !init?.method) {
+          loadCount += 1;
+          if (loadCount === 1) {
+            return jsonResponse(
+              {
+                data: null,
+                error: {
+                  code: "DRAFT_LOAD_FAILED",
+                  message: "Saved account progress could not be loaded.",
+                  retryable: true,
+                  action: { kind: "retry", label: "Try again" },
+                },
+              },
+              503,
+            );
+          }
+          return jsonResponse({
+            data: {
+              currentStep: 4,
+              draft: completionDraft({ currentWeight: "84" }),
+              updatedAt: "2026-08-10T12:00:00.000Z",
+            },
+            error: null,
+          });
+        }
+        if (url.endsWith("/api/onboarding") && init?.method === "PATCH") {
+          return jsonResponse({ data: { saved: true }, error: null });
+        }
+        if (url.endsWith("/api/foods")) {
+          return jsonResponse({ data: [], error: null });
+        }
+        return jsonResponse({ data: null, error: null });
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<OnboardingFlow initialStep={4} />);
+
+    await screen.findByText("Account progress could not be loaded.");
+    await new Promise((resolve) => window.setTimeout(resolve, 550));
+    expect(window.localStorage.getItem(ONBOARDING_DRAFT_KEY)).toBeNull();
+    expect(
+      fetchMock.mock.calls.some(([, init]) => init?.method === "PATCH"),
+    ).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: "Try account sync" }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Current weight")).toHaveValue("84");
+    });
+    await waitFor(
+      () => {
+        const patchCall = fetchMock.mock.calls.find(
+          ([, init]) => init?.method === "PATCH",
+        );
+        expect(patchCall).toBeDefined();
+        expect(JSON.parse(String(patchCall?.[1]?.body)).draft).toEqual(
+          expect.objectContaining({ currentWeight: "84" }),
+        );
+      },
+      { timeout: 1_500 },
+    );
+    expect(loadCount).toBe(2);
+  });
+
+  it("reloads then preserves a newer browser draft after an account-load failure", async () => {
+    window.localStorage.setItem(
+      ONBOARDING_DRAFT_KEY,
+      storedDraft(completionDraft({ currentWeight: "91" }), 2_000, 4),
+    );
+    let loadCount = 0;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/onboarding") && !init?.method) {
+          loadCount += 1;
+          if (loadCount === 1) {
+            return jsonResponse(
+              {
+                data: null,
+                error: {
+                  code: "DRAFT_LOAD_FAILED",
+                  message: "Saved account progress could not be loaded.",
+                  retryable: true,
+                  action: { kind: "retry", label: "Try again" },
+                },
+              },
+              503,
+            );
+          }
+          return jsonResponse({
+            data: {
+              currentStep: 4,
+              draft: completionDraft({ currentWeight: "82" }),
+              updatedAt: "1970-01-01T00:00:01.000Z",
+            },
+            error: null,
+          });
+        }
+        if (url.endsWith("/api/onboarding") && init?.method === "PATCH") {
+          return jsonResponse({ data: { saved: true }, error: null });
+        }
+        if (url.endsWith("/api/foods")) {
+          return jsonResponse({ data: [], error: null });
+        }
+        return jsonResponse({ data: null, error: null });
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<OnboardingFlow initialStep={4} />);
+
+    await screen.findByText("Account progress could not be loaded.");
+    expect(screen.getByLabelText("Current weight")).toHaveValue("91");
+    await new Promise((resolve) => window.setTimeout(resolve, 550));
+    expect(
+      fetchMock.mock.calls.some(([, init]) => init?.method === "PATCH"),
+    ).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: "Try account sync" }));
+
+    await waitFor(
+      () => {
+        const patchCall = fetchMock.mock.calls.find(
+          ([, init]) => init?.method === "PATCH",
+        );
+        expect(patchCall).toBeDefined();
+        expect(JSON.parse(String(patchCall?.[1]?.body)).draft).toEqual(
+          expect.objectContaining({ currentWeight: "91" }),
+        );
+      },
+      { timeout: 1_500 },
+    );
+    expect(screen.getByLabelText("Current weight")).toHaveValue("91");
+    expect(loadCount).toBe(2);
   });
 
   it("shows browser-only autosave status once and clears it after a successful retry", async () => {

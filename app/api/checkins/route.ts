@@ -7,6 +7,7 @@ import {
   type MealSlot,
 } from "@/src/lib/domain";
 import { apiError, apiSuccess } from "@/src/lib/api-response";
+import { isAuthSessionMissing } from "@/src/lib/auth-error-taxonomy";
 import { isDevelopmentDemo } from "@/src/lib/env";
 import { createSupabaseServerClient } from "@/src/lib/supabase/server";
 
@@ -52,8 +53,20 @@ export async function GET(request: Request) {
 
   try {
     const supabase = await createSupabaseServerClient();
-    const { data: auth } = await supabase.auth.getUser();
-    if (!auth.user) {
+    const { data: auth, error: authError } = await supabase.auth.getUser();
+    if (authError && !isAuthSessionMissing(authError)) {
+      return apiError(
+        "CHECKIN_AUTH_UNAVAILABLE",
+        "Your session could not be checked before loading check-ins.",
+        503,
+        {
+          details: "No check-in data was changed. Check the connection and try again.",
+          retryable: true,
+          action: { kind: "retry", label: "Try loading again" },
+        },
+      );
+    }
+    if (!auth.user || isAuthSessionMissing(authError)) {
       return apiError("SESSION_EXPIRED", "Log in to view check-ins.", 401);
     }
     const [daysResult, mealsResult] = await Promise.all([

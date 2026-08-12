@@ -97,6 +97,9 @@ describe("TodayDashboard meal completion", () => {
         { selector: "[aria-live]" },
       ),
     ).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Error code: CHECKIN_SAVE_UNAVAILABLE",
+    );
   });
 
   it("sends an explicit false state when a completed meal is undone", async () => {

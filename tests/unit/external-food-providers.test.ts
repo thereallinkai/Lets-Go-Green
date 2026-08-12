@@ -46,7 +46,7 @@ describe("external food normalization", () => {
     });
   });
 
-  it("uses the stable Open Food Facts v3 product route and converts sodium", async () => {
+  it("uses normalized Open Food Facts _100g units instead of raw-entry units", async () => {
     const fetcher = fixtureFetch(offFixture);
     const result = await loadOpenFoodFactsProduct("1234567890123", {
       userAgent: "LetsGoGreen tests@example.invalid",
@@ -59,9 +59,60 @@ describe("external food normalization", () => {
     expect(result.food.category_slugs).toEqual(
       expect.arrayContaining(["vegetable", "supplement"]),
     );
-    expect(result.nutrition.sodium_mg).toBe(200);
+    expect(result.nutrition).toMatchObject({
+      reference_unit: "g",
+      sodium_mg: 200,
+      cholesterol_mg: 12,
+      potassium_mg: 450,
+      calcium_mg: 100,
+      iron_mg: 3,
+      vitamin_d_mcg: 5,
+    });
+    expect(result.nutrition.nutrients).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "off-sodium",
+          amount: 0.2,
+          unit: "g",
+        }),
+        expect.objectContaining({
+          code: "off-vitamin-d",
+          amount: 0.000005,
+          unit: "g",
+        }),
+        expect.objectContaining({
+          code: "off-choline",
+          amount: 0.015,
+          unit: "g",
+        }),
+        expect.objectContaining({
+          code: "off-energy-kcal",
+          amount: 300,
+          unit: "kcal",
+        }),
+        expect.objectContaining({
+          code: "off-alcohol",
+          amount: 5,
+          unit: "% vol",
+        }),
+        expect.objectContaining({
+          code: "off-vitamin-a",
+          amount: 100,
+          unit: "g",
+        }),
+      ]),
+    );
+    expect(result.nutrition.nutrients.map((entry) => entry.code)).not.toEqual(
+      expect.arrayContaining([
+        "off-nova-group",
+        "off-fruits-vegetables-nuts-estimate-from-ingredients",
+      ]),
+    );
     expect(result.sourceMetadata.source_version).toBe(
       "Open Food Facts product API v3",
+    );
+    expect(result.sourceMetadata.parser_version).toBe(
+      "food-source-normalizer-v2",
     );
   });
 
@@ -84,6 +135,12 @@ describe("external food normalization", () => {
     );
     expect(requestedUrl.searchParams.get("page_size")).toBe("10");
     expect(requestedUrl.searchParams.get("fields")).toContain("nutriments");
+    expect(requestedUrl.searchParams.get("fields")).toContain(
+      "product_quantity_unit",
+    );
+    expect(requestedUrl.searchParams.get("fields")).toContain(
+      "nutrition_data_per",
+    );
     expect(candidates[0]).toMatchObject({
       provider: "open_food_facts",
       externalId: "748927022650",
@@ -91,6 +148,7 @@ describe("external food normalization", () => {
       gtin: "748927022650",
       imageUrl: null,
       nutritionImageUrl: null,
+      nutritionReferenceUnit: "g",
       nutritionPreview: {
         calories: 375,
         proteinGrams: 75,
@@ -99,6 +157,81 @@ describe("external food normalization", () => {
       },
     });
     expect(candidates[1]?.nutritionPreview.calories).toBeCloseTo(375, 0);
+  });
+
+  it("labels liquid search previews per 100 mL and rejects unsafe gram imports", async () => {
+    const liquidProduct = {
+      code: "1234567890123",
+      product_name: "Tomato juice",
+      brands: "Example Brand",
+      quantity: "1 L",
+      product_quantity_unit: "ml",
+      nutrition_data_per: "100g",
+      serving_size: "250 ml",
+      serving_quantity_unit: "ml",
+      nutriments: {
+        "energy-kcal_100g": 18,
+        proteins_100g: 0.8,
+        carbohydrates_100g: 3.5,
+        fat_100g: 0.1,
+      },
+    };
+    const search = await searchOpenFoodFactsProducts("tomato juice", {
+      userAgent: "LetsGoGreen tests@example.invalid",
+      fetcher: fixtureFetch({ products: [liquidProduct] }),
+    });
+
+    expect(search[0]?.nutritionReferenceUnit).toBe("ml");
+    await expect(
+      loadOpenFoodFactsProduct("1234567890123", {
+        userAgent: "LetsGoGreen tests@example.invalid",
+        fetcher: fixtureFetch({ product: liquidProduct }),
+      }),
+    ).rejects.toMatchObject({ code: "unsupported_reference_unit" });
+  });
+
+  it("fails closed when Open Food Facts basis hints conflict or are absent", async () => {
+    const core = {
+      "energy-kcal_100g": 100,
+      proteins_100g: 1,
+      carbohydrates_100g: 20,
+      fat_100g: 1,
+    };
+    const conflicting = {
+      code: "1234567890123",
+      product_name: "Conflicting product",
+      product_quantity_unit: "ml",
+      serving_quantity_unit: "g",
+      nutrition_data_per: "100g",
+      nutriments: core,
+    };
+    const unknown = {
+      code: "1234567890124",
+      product_name: "Unknown basis product",
+      nutrition_data_per: "100g",
+      nutriments: core,
+    };
+
+    const candidates = await searchOpenFoodFactsProducts("basis products", {
+      userAgent: "LetsGoGreen tests@example.invalid",
+      fetcher: fixtureFetch({ products: [conflicting, unknown] }),
+    });
+    expect(candidates.map((candidate) => candidate.nutritionReferenceUnit)).toEqual([
+      "unknown",
+      "unknown",
+    ]);
+    await expect(
+      loadOpenFoodFactsProduct("1234567890123", {
+        userAgent: "LetsGoGreen tests@example.invalid",
+        fetcher: fixtureFetch({ product: conflicting }),
+      }),
+    ).rejects.toMatchObject({ code: "ambiguous_reference_unit" });
+    await expect(
+      loadOpenFoodFactsProduct("1234567890124", {
+        userAgent: "LetsGoGreen tests@example.invalid",
+        fetcher: fixtureFetch({ product: unknown }),
+      }),
+    ).rejects.toMatchObject({ code: "ambiguous_reference_unit" });
   });
 
   it("keeps only HTTPS Open Food Facts package-photo URLs", async () => {

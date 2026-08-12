@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { apiError, apiSuccess } from "@/src/lib/api-response";
+import { isAuthSessionMissing } from "@/src/lib/auth-error-taxonomy";
 import { confirmedFoodLabelDataSchema } from "@/src/lib/domain/food-label";
 import { isDevelopmentDemo } from "@/src/lib/env";
 import { createSupabaseServerClient } from "@/src/lib/supabase/server";
@@ -163,7 +164,7 @@ export async function POST(
   try {
     const supabase = await createSupabaseServerClient();
     const { data: auth, error: authError } = await supabase.auth.getUser();
-    if (authError) {
+    if (authError && !isAuthSessionMissing(authError)) {
       return apiError(
         "LABEL_AUTH_UNAVAILABLE",
         "Your session could not be checked for label confirmation.",
@@ -175,7 +176,7 @@ export async function POST(
         },
       );
     }
-    if (!auth.user) {
+    if (!auth.user || isAuthSessionMissing(authError)) {
       return apiError("SESSION_EXPIRED", "Log in before confirming a label.", 401, {
         details: "The draft and private photo were not changed.",
         retryable: false,

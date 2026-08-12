@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { Edit3, Scale, Trash2, TrendingDown } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
+import { ApiErrorNotice } from "@/components/api-error-notice";
 import {
   CartesianGrid,
   Line,
@@ -18,6 +19,12 @@ import {
   buildSevenDayRollingAverageSeries,
   localDateInTimeZone,
 } from "@/src/lib/domain";
+import type { ApiError } from "@/src/lib/api-response";
+import {
+  apiErrorFromResponse,
+  apiErrorFromThrown,
+  clientApiError,
+} from "@/src/lib/client-api-error";
 
 const KG_TO_LB = 2.2046226218;
 const RANGE_OPTIONS = [
@@ -32,6 +39,7 @@ export type ProgressEntry = {
   date: string;
   isoDate: string;
   kg: number;
+  isBaseline?: boolean;
 };
 
 const demoEntries: ProgressEntry[] = [
@@ -83,6 +91,7 @@ export function ProgressView({
   );
   const [range, setRange] = useState<RangeKey>("4-weeks");
   const [message, setMessage] = useState("");
+  const [operationError, setOperationError] = useState<ApiError | null>(null);
   const todayIso = localDateInTimeZone(new Date(), timeZone);
   const selectedRange =
     RANGE_OPTIONS.find((option) => option.key === range) ?? RANGE_OPTIONS[0];
@@ -118,6 +127,9 @@ export function ProgressView({
   const latest = entries[0] ?? null;
   const start = baselineKg ?? entries.at(-1)?.kg ?? null;
   const change = latest && start !== null ? latest.kg - start : null;
+  const todayIsProtectedBaseline = entries.some(
+    (entry) => entry.isBaseline && entry.isoDate === todayIso,
+  );
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
@@ -131,6 +143,13 @@ export function ProgressView({
       return;
     }
     const kg = unit === "kg" ? parsed : parsed / KG_TO_LB;
+    const fallback = clientApiError(
+      "WEIGHT_SAVE_UNAVAILABLE",
+      "The weight entry could not be saved.",
+      "Your previous history was restored. Check the connection and try again.",
+      { retryable: true, action: { kind: "retry", label: "Try saving again" } },
+    );
+    setOperationError(null);
     const existing = entries.find((entry) => entry.id === editingId);
     const next: ProgressEntry = existing
       ? { ...existing, kg: Number(kg.toFixed(3)) }
@@ -160,7 +179,9 @@ export function ProgressView({
           ),
         },
       );
-      if (!response.ok) throw new Error("save_failed");
+      if (!response.ok) {
+        throw await apiErrorFromResponse(response, fallback);
+      }
       const result =
         typeof response.json === "function"
           ? await response.json().catch(() => null)
@@ -176,8 +197,10 @@ export function ProgressView({
       setMessage(`Saved ${parsed.toFixed(1)} ${unit}.`);
       setValue("");
       setEditingId(null);
-    } catch {
+    } catch (error) {
+      const publicError = apiErrorFromThrown(error, fallback);
       setEntries(previous);
+      setOperationError(publicError);
       setMessage(
         "The entry could not be saved. Your previous history was restored.",
       );
@@ -185,21 +208,38 @@ export function ProgressView({
   }
 
   async function remove(entry: ProgressEntry) {
+    if (entry.isBaseline) {
+      setMessage(
+        "The onboarding starting weight is protected. Remove or edit a later reading instead.",
+      );
+      return;
+    }
     const previous = entries;
+    const fallback = clientApiError(
+      "WEIGHT_DELETE_UNAVAILABLE",
+      "The weight entry could not be removed.",
+      "Your previous history was restored. Check the connection and try again.",
+      { retryable: true, action: { kind: "retry", label: "Try removing again" } },
+    );
+    setOperationError(null);
     setEntries((current) => current.filter((item) => item.id !== entry.id));
     setMessage(`Removing ${entry.date}…`);
     try {
       const response = await fetch(`/api/weights/${entry.id}`, {
         method: "DELETE",
       });
-      if (!response.ok) throw new Error("delete_failed");
+      if (!response.ok) {
+        throw await apiErrorFromResponse(response, fallback);
+      }
       setMessage(`Removed the ${entry.date} entry.`);
       if (editingId === entry.id) {
         setEditingId(null);
         setValue("");
       }
-    } catch {
+    } catch (error) {
+      const publicError = apiErrorFromThrown(error, fallback);
       setEntries(previous);
+      setOperationError(publicError);
       setMessage(
         "The entry could not be removed. Your previous history was restored.",
       );
@@ -207,7 +247,14 @@ export function ProgressView({
   }
 
   function edit(entry: ProgressEntry) {
+    if (entry.isBaseline) {
+      setMessage(
+        "The onboarding starting weight is protected. Add or edit a later reading instead.",
+      );
+      return;
+    }
     setEditingId(entry.id);
+    setOperationError(null);
     setValue(
       (unit === "kg" ? entry.kg : entry.kg * KG_TO_LB).toFixed(1),
     );
@@ -217,6 +264,7 @@ export function ProgressView({
   function onValueChange(next: string) {
     setValue(next);
     setMessage("");
+    setOperationError(null);
   }
 
   function changeUnit(nextUnit: "kg" | "lb") {
@@ -246,6 +294,13 @@ export function ProgressView({
           <p>Missing days remain gaps. One reading never changes your plan.</p>
         </div>
       </header>
+
+      {operationError ? (
+        <ApiErrorNotice
+          error={operationError}
+          heading="We could not update progress"
+        />
+      ) : null}
 
       <section className="progress-summary" aria-label="Progress summary">
         {[
@@ -384,8 +439,18 @@ export function ProgressView({
                   Equivalent: {unit === "kg" ? (Number(value) * KG_TO_LB).toFixed(1) : (Number(value) / KG_TO_LB).toFixed(1)} {unit === "kg" ? "lb" : "kg"}
                 </p>
               ) : null}
+              {todayIsProtectedBaseline && !editingId ? (
+                <p className="field-help">
+                  Today&apos;s reading is your protected onboarding starting
+                  weight. Add the next reading on a later day.
+                </p>
+              ) : null}
               {message ? <p className={message.includes("could not") || message.startsWith("Enter") ? "field-error" : "field-help"} role="status">{message}</p> : null}
-              <button className="button button-dark form-submit" type="submit">
+              <button
+                className="button button-dark form-submit"
+                disabled={todayIsProtectedBaseline && !editingId}
+                type="submit"
+              >
                 {editingId ? "Save changes" : "Save entry"}
               </button>
               {editingId ? (
@@ -403,10 +468,16 @@ export function ProgressView({
                 <div className="history-row" key={entry.id}>
                   <span>{entry.date}</span>
                   <strong>{displayWeight(entry.kg, unit)}</strong>
-                  <span>
-                    <button className="icon-button" aria-label={`Edit weight for ${entry.date}`} type="button" onClick={() => edit(entry)}><Edit3 size={15} /></button>
-                    <button className="icon-button" aria-haspopup="dialog" aria-label={`Delete weight for ${entry.date}`} type="button" onClick={() => setDeleteCandidate(entry)}><Trash2 size={15} /></button>
-                  </span>
+                  {entry.isBaseline ? (
+                    <span title="This starting point anchors plan history and cannot be edited or deleted.">
+                      Starting point · protected
+                    </span>
+                  ) : (
+                    <span>
+                      <button className="icon-button" aria-label={`Edit weight for ${entry.date}`} type="button" onClick={() => edit(entry)}><Edit3 size={15} /></button>
+                      <button className="icon-button" aria-haspopup="dialog" aria-label={`Delete weight for ${entry.date}`} type="button" onClick={() => setDeleteCandidate(entry)}><Trash2 size={15} /></button>
+                    </span>
+                  )}
                 </div>
               ))}
             </div>

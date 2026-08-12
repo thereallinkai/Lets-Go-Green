@@ -13,6 +13,7 @@ export type ExternalFoodCandidate = {
   dataType: string | null;
   imageUrl: string | null;
   nutritionImageUrl: string | null;
+  nutritionReferenceUnit: "g" | "ml" | "unknown";
   nutritionPreview: {
     calories: number | null;
     proteinGrams: number | null;
@@ -69,6 +70,8 @@ export class ExternalFoodError extends Error {
       | "provider_unavailable"
       | "not_found"
       | "incomplete_nutrition"
+      | "unsupported_reference_unit"
+      | "ambiguous_reference_unit"
       | "invalid_response"
       | "rate_limited",
     message: string,

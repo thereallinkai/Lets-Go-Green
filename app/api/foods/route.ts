@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { apiError, apiSuccess } from "@/src/lib/api-response";
+import { isAuthSessionMissing } from "@/src/lib/auth-error-taxonomy";
 import { DEMO_CATALOG } from "@/src/lib/demo-catalog";
 import { isDevelopmentDemo } from "@/src/lib/env";
 import {
@@ -89,7 +90,7 @@ export async function GET(request: Request) {
     const authResult = await supabase.auth.getUser();
     userId = authResult.data.user?.id ?? null;
     const authError = authResult.error;
-    if (authError) {
+    if (authError && !isAuthSessionMissing(authError)) {
       return authServiceUnavailable();
     }
   } catch {
@@ -128,21 +129,80 @@ export async function GET(request: Request) {
       );
     }
 
-    const rows = Array.isArray(data) ? data : [];
-    const items = rows.flatMap((row): FoodCatalogItem[] => {
-      if (!row || typeof row !== "object") return [];
+    if (!Array.isArray(data)) {
+      console.error("search_food_catalog returned a non-array payload");
+      return apiError(
+        "FOOD_CATALOG_RESPONSE_INVALID",
+        "Saved food data could not be read safely.",
+        503,
+        {
+          details:
+            "The catalog returned an unexpected format, so no incomplete results were shown and no food preferences were changed. Retry after the service refreshes.",
+          retryable: true,
+          action: { kind: "retry", label: "Try search again" },
+        },
+      );
+    }
+
+    const rows = data;
+    const parsedRows = rows.map((row) => {
+      if (!row || typeof row !== "object") return null;
       const candidate = { ...(row as Record<string, unknown>) };
       delete candidate.total_count;
       const checked = foodCatalogItemSchema.safeParse(candidate);
-      return checked.success ? [checked.data] : [];
+      return checked.success ? checked.data : null;
     });
-    const firstRow = rows[0] as Record<string, unknown> | undefined;
-    const total = Number(firstRow?.total_count ?? items.length);
-    const response = apiSuccess(items);
-    response.headers.set(
-      "X-Total-Count",
-      String(Number.isFinite(total) ? total : items.length),
+    const invalidRowCount = parsedRows.filter((row) => row === null).length;
+    if (invalidRowCount > 0) {
+      console.error("search_food_catalog returned invalid rows", {
+        invalidRowCount,
+      });
+      return apiError(
+        "FOOD_CATALOG_RESPONSE_INVALID",
+        "Saved food data could not be read safely.",
+        503,
+        {
+          details:
+            "The catalog returned incomplete food records, so no partial results were shown and no food preferences were changed. Retry after the service refreshes.",
+          retryable: true,
+          action: { kind: "retry", label: "Try search again" },
+        },
+      );
+    }
+    const items = parsedRows as FoodCatalogItem[];
+    const totalCounts = rows.map((row) =>
+      row && typeof row === "object"
+        ? (row as Record<string, unknown>).total_count
+        : undefined,
     );
+    const total = totalCounts[0] ?? 0;
+    const invalidTotal = rows.length > 0 && (
+      typeof total !== "number" ||
+      !Number.isSafeInteger(total) ||
+      total < offset + items.length ||
+      totalCounts.some((rowTotal) => rowTotal !== total)
+    );
+    if (invalidTotal) {
+      console.error("search_food_catalog returned an invalid total count");
+      return apiError(
+        "FOOD_CATALOG_RESPONSE_INVALID",
+        "Saved food data could not be read safely.",
+        503,
+        {
+          details:
+            "The catalog returned inconsistent paging information, so no incomplete results were shown and no food preferences were changed. Retry after the service refreshes.",
+          retryable: true,
+          action: { kind: "retry", label: "Try search again" },
+        },
+      );
+    }
+    const response = apiSuccess(items);
+    // A window count is unavailable when PostgreSQL returns no row for an
+    // offset past the end. Do not claim the catalog has zero matches in that
+    // case; callers can still treat the empty page as terminal.
+    if (rows.length > 0 || offset === 0) {
+      response.headers.set("X-Total-Count", String(total));
+    }
     return response;
   } catch {
     return apiError(

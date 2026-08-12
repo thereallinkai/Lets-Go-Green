@@ -18,6 +18,7 @@ export default defineConfig({
       "tests/component/**/*.test.{ts,tsx}",
     ],
     exclude: ["tests/e2e/**", "node_modules/**", ".next/**"],
+    maxWorkers: 4,
     clearMocks: true,
     restoreMocks: true,
     coverage: {

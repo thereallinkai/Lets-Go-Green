@@ -763,6 +763,8 @@ export function FoodSearchPicker({
             const key = `${candidate.provider}:${candidate.externalId}`;
             const isImporting = importingKey === key;
             const isImported = importedKeys.has(key);
+            const usesUnsupportedBasis =
+              candidate.nutritionReferenceUnit !== "g";
             const destination = destinations[result.key] ?? "breakfast";
             const sourcePhotos = [
               candidate.imageUrl
@@ -801,45 +803,75 @@ export function FoodSearchPicker({
                     <p className={styles.secondaryText}>{candidate.dataType}</p>
                   ) : null}
                   <p className={styles.nutritionPreview}>
-                    <strong>Per 100 g:</strong> {nutritionSummary(candidate)}
+                    <strong>
+                      {candidate.nutritionReferenceUnit === "g"
+                        ? "Per 100 g:"
+                        : candidate.nutritionReferenceUnit === "ml"
+                          ? "Per 100 mL:"
+                          : "Per 100 g or mL (source unclear):"}
+                    </strong>{" "}
+                    {nutritionSummary(candidate)}
                   </p>
                   <p className={styles.sourceNote}>
-                    Preview only; values come from {providerLabel(candidate.provider)} and are refetched before import.
+                    {usesUnsupportedBasis
+                      ? candidate.nutritionReferenceUnit === "ml"
+                        ? "Preview only. This liquid is reported per 100 mL and cannot enter gram-based plan math safely. Use the package-label workflow below only when the label gives a serving weight in grams."
+                        : "Preview only. The source does not say whether these values are per 100 g or per 100 mL, so the record cannot enter plan math safely. Choose another result or use a label with a serving weight in grams."
+                      : `Preview only; values come from ${providerLabel(candidate.provider)} and are refetched before import.`}
                   </p>
                 </div>
                 <div className={styles.importControls}>
-                  <label>
-                    <span>Use after review</span>
-                    <select
-                      aria-label={`Intended destination for ${candidate.displayName}`}
-                      value={destination}
-                      disabled={isImporting || isImported}
-                      onChange={(event) =>
-                        setDestinations((current) => ({
-                          ...current,
-                          [result.key]: event.target.value as Meal,
-                        }))
-                      }
-                    >
-                      {(Object.keys(mealLabels) as Meal[]).map((meal) => (
-                        <option value={meal} key={meal}>{mealLabels[meal]}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <p>Import for source review first. It is not added to the selected meal until approved.</p>
-                  <button
-                    className="button button-quiet"
-                    type="button"
-                    disabled={Boolean(importingKey) || isImported}
-                    aria-label={`Import ${candidate.displayName} for ${mealLabels[destination]} review`}
-                    onClick={() => void importCandidate(candidate, destination)}
-                  >
-                    {isImporting
-                      ? "Importing…"
-                      : isImported
-                        ? `Imported for ${mealLabels[destination]} review`
-                        : `Import for ${mealLabels[destination]} review`}
-                  </button>
+                  {usesUnsupportedBasis ? (
+                    <>
+                      <p>
+                        Import unavailable: this source does not provide a
+                        supported, unambiguous 100 g nutrition reference.
+                      </p>
+                      <button
+                        className="button button-quiet"
+                        type="button"
+                        disabled
+                        aria-label={`Nutrition-basis import unavailable for ${candidate.displayName}`}
+                      >
+                        Nutrition-basis import unavailable
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <label>
+                        <span>Use after review</span>
+                        <select
+                          aria-label={`Intended destination for ${candidate.displayName}`}
+                          value={destination}
+                          disabled={isImporting || isImported}
+                          onChange={(event) =>
+                            setDestinations((current) => ({
+                              ...current,
+                              [result.key]: event.target.value as Meal,
+                            }))
+                          }
+                        >
+                          {(Object.keys(mealLabels) as Meal[]).map((meal) => (
+                            <option value={meal} key={meal}>{mealLabels[meal]}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <p>Import for source review first. It is not added to the selected meal until approved.</p>
+                      <button
+                        className="button button-quiet"
+                        type="button"
+                        disabled={Boolean(importingKey) || isImported}
+                        aria-label={`Import ${candidate.displayName} for ${mealLabels[destination]} review`}
+                        onClick={() => void importCandidate(candidate, destination)}
+                      >
+                        {isImporting
+                          ? "Importing…"
+                          : isImported
+                            ? `Imported for ${mealLabels[destination]} review`
+                            : `Import for ${mealLabels[destination]} review`}
+                      </button>
+                    </>
+                  )}
                 </div>
               </article>
             );

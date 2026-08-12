@@ -115,6 +115,9 @@ describe("ProgressView weight entry", () => {
         "The entry could not be saved. Your previous history was restored.",
       ),
     );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Error code: WEIGHT_SAVE_UNAVAILABLE",
+    );
     expect(
       screen.getAllByText("80.7 kg", { selector: ".history-row strong" }),
     ).toHaveLength(1);
@@ -122,6 +125,41 @@ describe("ProgressView weight entry", () => {
 });
 
 describe("ProgressView history and trends", () => {
+  it("explains and removes edit/delete controls for the protected baseline", () => {
+    const today = localDateInTimeZone(new Date(), "America/New_York");
+    const date = new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+      timeZone: "UTC",
+    }).format(new Date(`${today}T12:00:00Z`));
+
+    render(
+      <ProgressView
+        initialEntries={[
+          {
+            id: "baseline-entry",
+            date,
+            isoDate: today,
+            kg: 80,
+            isBaseline: true,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("Starting point · protected")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: `Edit weight for ${date}` }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: `Delete weight for ${date}` }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save entry" })).toBeDisabled();
+    expect(
+      screen.getByText(/Today.*protected onboarding starting weight/),
+    ).toBeInTheDocument();
+  });
+
   it("requires confirmation before deleting an entry", async () => {
     const fetchMock = vi.fn(async () => ({ ok: true }));
     vi.stubGlobal("fetch", fetchMock);
@@ -174,6 +212,9 @@ describe("ProgressView history and trends", () => {
       expect(screen.getByRole("status")).toHaveTextContent(
         "The entry could not be removed. Your previous history was restored.",
       ),
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Error code: WEIGHT_DELETE_UNAVAILABLE",
     );
     expect(
       screen.getByRole("button", { name: "Delete weight for Jul 24" }),

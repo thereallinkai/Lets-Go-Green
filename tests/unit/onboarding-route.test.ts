@@ -2,6 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const routeState = vi.hoisted(() => ({
   rpc: vi.fn(),
+  authResult: {
+    data: { user: { id: "user-1" } as { id: string } | null },
+    error: null as {
+      name?: string;
+      status?: number;
+      code?: string;
+      message?: string;
+    } | null,
+  },
 }));
 
 vi.mock("@/src/lib/env", () => ({
@@ -11,6 +20,9 @@ vi.mock("@/src/lib/env", () => ({
 vi.mock("@/src/lib/supabase/server", () => ({
   createSupabaseServerClient: async () => ({
     clientKind: "user",
+    auth: {
+      getUser: vi.fn().mockImplementation(() => routeState.authResult),
+    },
     rpc(
       this: { clientKind: string },
       name: string,
@@ -63,8 +75,35 @@ function completionRequest(overrides: Record<string, unknown> = {}) {
 describe("PUT onboarding route", () => {
   beforeEach(() => {
     routeState.rpc.mockReset();
+    routeState.authResult = {
+      data: { user: { id: "user-1" } },
+      error: null,
+    };
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     vi.spyOn(console, "error").mockImplementation(() => undefined);
+  });
+
+  it("maps AuthSessionMissingError to login before completion RPC work", async () => {
+    routeState.authResult = {
+      data: { user: null },
+      error: {
+        name: "AuthSessionMissingError",
+        status: 400,
+        message: "private auth-js detail",
+      },
+    };
+
+    const response = await PUT(completionRequest());
+    const result = await response.json();
+
+    expect(response.status).toBe(401);
+    expect(result.error).toMatchObject({
+      code: "SESSION_EXPIRED",
+      retryable: false,
+      action: { href: "/login" },
+    });
+    expect(JSON.stringify(result)).not.toContain("private auth-js");
+    expect(routeState.rpc).not.toHaveBeenCalled();
   });
 
   it("retries one transient transport failure and completes with the same idempotent arguments", async () => {

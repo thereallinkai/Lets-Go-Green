@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { apiError } from "@/src/lib/api-response";
+import { isAuthSessionMissing } from "@/src/lib/auth-error-taxonomy";
 import { isDevelopmentDemo } from "@/src/lib/env";
 import { createSupabaseServerClient } from "@/src/lib/supabase/server";
 
@@ -54,7 +55,19 @@ export async function GET() {
   try {
     const supabase = await createSupabaseServerClient();
     const { data: auth, error: authError } = await supabase.auth.getUser();
-    if (authError || !auth.user) {
+    if (authError && !isAuthSessionMissing(authError)) {
+      return apiError(
+        "EXPORT_AUTH_UNAVAILABLE",
+        "Your session could not be checked before exporting account data.",
+        503,
+        {
+          details: "No export was created. Check the connection and try again.",
+          retryable: true,
+          action: { kind: "retry", label: "Try exporting again" },
+        },
+      );
+    }
+    if (!auth.user || isAuthSessionMissing(authError)) {
       return apiError(
         "SESSION_EXPIRED",
         "Log in again before exporting account data.",

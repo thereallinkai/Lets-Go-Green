@@ -304,9 +304,9 @@ select has_function(
 );
 select has_function(
   'public',
-  'reserve_food_label_upload',
+  'preflight_food_label_upload',
   array['uuid', 'uuid', 'food_label_image_kind'],
-  'the atomic label-upload reservation RPC exists'
+  'the pre-processing label-upload rate-limit RPC exists'
 );
 select has_function(
   'public',

@@ -14,6 +14,7 @@ import {
   type NutritionRecord,
 } from "@/src/lib/domain";
 import { apiError, apiSuccess, publicError } from "@/src/lib/api-response";
+import { isAuthSessionMissing } from "@/src/lib/auth-error-taxonomy";
 import { getAIProviderMode, isDevelopmentDemo } from "@/src/lib/env";
 import { createSupabaseAdminClient } from "@/src/lib/supabase/admin";
 import { createSupabaseServerClient } from "@/src/lib/supabase/server";
@@ -105,10 +106,27 @@ export async function POST(request: Request) {
     }, 201);
   }
 
-  const supabase = await createSupabaseServerClient();
-  const { data: auth } = await supabase.auth.getUser();
-  const user = auth.user;
-  if (!user) return apiError("SESSION_EXPIRED", "Log in to generate a plan.", 401);
+  let supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>;
+  let user: NonNullable<
+    Awaited<ReturnType<typeof createSupabaseServerClient>> extends {
+      auth: { getUser: () => Promise<{ data: { user: infer User } }> };
+    }
+      ? User
+      : never
+  >;
+  try {
+    supabase = await createSupabaseServerClient();
+    const { data: auth, error: authError } = await supabase.auth.getUser();
+    if (authError && !isAuthSessionMissing(authError)) {
+      return planAuthUnavailable();
+    }
+    if (!auth.user || isAuthSessionMissing(authError)) {
+      return apiError("SESSION_EXPIRED", "Log in to generate a plan.", 401);
+    }
+    user = auth.user;
+  } catch {
+    return planAuthUnavailable();
+  }
   let admin: ReturnType<typeof createSupabaseAdminClient>;
   try {
     admin = createSupabaseAdminClient();
@@ -523,4 +541,18 @@ export async function POST(request: Request) {
       classifyPlanGenerationFailure(code as PlanGenerationFailureCode),
     );
   }
+}
+
+function planAuthUnavailable() {
+  return apiError(
+    "PLAN_AUTH_UNAVAILABLE",
+    "Your session could not be checked before generating a plan.",
+    503,
+    {
+      details:
+        "No plan request was started. Check the connection and try again with the same request.",
+      retryable: true,
+      action: { kind: "retry", label: "Try generating again" },
+    },
+  );
 }

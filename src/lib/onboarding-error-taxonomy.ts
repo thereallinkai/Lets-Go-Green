@@ -65,6 +65,17 @@ export function classifyOnboardingCompletionError(
       },
     };
   }
+  if (code === "23514" && message.includes("onboarding is already completed")) {
+    return {
+      code: "ONBOARDING_ALREADY_COMPLETED",
+      message: "This account has already completed onboarding.",
+      details:
+        "Completed starting details cannot be replaced through setup. Continue to Today, then use Profile, Settings, or Progress for later changes.",
+      status: 409,
+      retryable: false,
+      action: { kind: "navigate", label: "Go to Today", href: "/today" },
+    };
+  }
   if (code === "PGRST202" || code === "42883") {
     return {
       code: "ONBOARDING_DATABASE_OUTDATED",

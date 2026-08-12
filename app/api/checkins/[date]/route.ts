@@ -8,6 +8,7 @@ import {
   type MealSlotCheckin,
 } from "@/src/lib/domain";
 import { apiError, apiSuccess } from "@/src/lib/api-response";
+import { isAuthSessionMissing } from "@/src/lib/auth-error-taxonomy";
 import { isDevelopmentDemo } from "@/src/lib/env";
 import { createSupabaseServerClient } from "@/src/lib/supabase/server";
 
@@ -94,16 +95,56 @@ function toSlotCheckins(
   );
 }
 
-async function context() {
+async function context(includeTimeZone = false) {
   const supabase = await createSupabaseServerClient();
-  const { data } = await supabase.auth.getUser();
-  if (!data.user) return { supabase, user: null, timeZone: "UTC" };
-  const { data: profile } = await supabase
+  const { data, error: authError } = await supabase.auth.getUser();
+  if (authError || !data.user || !includeTimeZone) {
+    return {
+      supabase,
+      user: data.user,
+      authError,
+      timeZone: null,
+      profileError: null,
+    };
+  }
+  const { data: profile, error: profileError } = await supabase
     .from("profiles")
     .select("time_zone")
     .eq("user_id", data.user.id)
     .maybeSingle();
-  return { supabase, user: data.user, timeZone: profile?.time_zone ?? "UTC" };
+  return {
+    supabase,
+    user: data.user,
+    authError,
+    timeZone: profile?.time_zone ?? null,
+    profileError,
+  };
+}
+
+function authUnavailable() {
+  return apiError(
+    "CHECKIN_AUTH_UNAVAILABLE",
+    "Your session could not be checked before using check-ins.",
+    503,
+    {
+      details: "No check-in data was changed. Check the connection and try again.",
+      retryable: true,
+      action: { kind: "retry", label: "Try again" },
+    },
+  );
+}
+
+function profileUnavailable() {
+  return apiError(
+    "CHECKIN_PROFILE_UNAVAILABLE",
+    "Your time zone could not be checked before saving the check-in.",
+    503,
+    {
+      details: "No check-in data was changed. Check the connection and try again.",
+      retryable: true,
+      action: { kind: "retry", label: "Try saving again" },
+    },
+  );
 }
 
 function demoCheckin(date: string) {
@@ -132,8 +173,11 @@ export async function GET(
   if (isDevelopmentDemo()) return apiSuccess(demoCheckin(date));
 
   try {
-    const { supabase, user } = await context();
-    if (!user) {
+    const { supabase, user, authError } = await context();
+    if (authError && !isAuthSessionMissing(authError)) {
+      return authUnavailable();
+    }
+    if (!user || isAuthSessionMissing(authError)) {
       return apiError("SESSION_EXPIRED", "Log in to view check-ins.", 401);
     }
     const [dayResult, mealsResult] = await Promise.all([
@@ -238,9 +282,25 @@ export async function PATCH(
   }
 
   try {
-    const { supabase, user, timeZone } = await context();
-    if (!user) {
+    const { supabase, user, authError, timeZone, profileError } =
+      await context(true);
+    if (authError && !isAuthSessionMissing(authError)) {
+      return authUnavailable();
+    }
+    if (!user || isAuthSessionMissing(authError)) {
       return apiError("SESSION_EXPIRED", "Log in to update check-ins.", 401);
+    }
+    if (profileError) return profileUnavailable();
+    if (!timeZone) {
+      return apiError(
+        "PROFILE_REQUIRED",
+        "Complete profile setup before saving check-ins.",
+        409,
+        {
+          details: "A verified profile and time zone are required for local-date records.",
+          action: { kind: "navigate", label: "Finish profile setup", href: "/onboarding" },
+        },
+      );
     }
     if (date > localDateInTimeZone(new Date(), timeZone)) {
       return apiError(
@@ -328,9 +388,25 @@ export async function PUT(
   }
 
   try {
-    const { supabase, user, timeZone } = await context();
-    if (!user) {
+    const { supabase, user, authError, timeZone, profileError } =
+      await context(true);
+    if (authError && !isAuthSessionMissing(authError)) {
+      return authUnavailable();
+    }
+    if (!user || isAuthSessionMissing(authError)) {
       return apiError("SESSION_EXPIRED", "Log in to update check-ins.", 401);
+    }
+    if (profileError) return profileUnavailable();
+    if (!timeZone) {
+      return apiError(
+        "PROFILE_REQUIRED",
+        "Complete profile setup before saving check-ins.",
+        409,
+        {
+          details: "A verified profile and time zone are required for local-date records.",
+          action: { kind: "navigate", label: "Finish profile setup", href: "/onboarding" },
+        },
+      );
     }
     if (date > localDateInTimeZone(new Date(), timeZone)) {
       return apiError(

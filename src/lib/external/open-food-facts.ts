@@ -61,6 +61,95 @@ function nutrient(nutriments: UnknownRecord, key: string): number | null {
   return finiteNumber(nutriments[`${key}_100g`]);
 }
 
+const NORMALIZED_WEIGHT_NUTRIENT_CODES = new Set([
+  "added-sugars",
+  "alpha-linolenic-acid",
+  "beta-carotene",
+  "bicarbonate",
+  "biotin",
+  "caffeine",
+  "calcium",
+  "carbohydrates",
+  "casein",
+  "chloride",
+  "cholesterol",
+  "chromium",
+  "copper",
+  "dha",
+  "epa",
+  "erythritol",
+  "fat",
+  "fiber",
+  "fluoride",
+  "fructose",
+  "glucose",
+  "insoluble-fiber",
+  "iodine",
+  "iron",
+  "lactose",
+  "magnesium",
+  "maltodextrins",
+  "manganese",
+  "molybdenum",
+  "monounsaturated-fat",
+  "nucleotides",
+  "omega-3-fat",
+  "omega-6-fat",
+  "omega-9-fat",
+  "pantothenic-acid",
+  "phosphorus",
+  "polyols",
+  "polyunsaturated-fat",
+  "potassium",
+  "proteins",
+  "salt",
+  "saturated-fat",
+  "selenium",
+  "serum-proteins",
+  "silica",
+  "sodium",
+  "soluble-fiber",
+  "starch",
+  "sucrose",
+  "sugars",
+  "taurine",
+  "trans-fat",
+  "vitamin-a",
+  "vitamin-b1",
+  "vitamin-b2",
+  "vitamin-b6",
+  "vitamin-b9",
+  "vitamin-b12",
+  "vitamin-c",
+  "vitamin-d",
+  "vitamin-e",
+  "vitamin-k",
+  "vitamin-pp",
+  "zinc",
+]);
+
+function canonicalNutrientUnit(
+  key: string,
+  contributorUnit: unknown,
+): string | null {
+  if (key === "energy-kcal") return "kcal";
+  if (key === "energy" || key === "energy-kj") return "kJ";
+  if (key === "alcohol") return "% vol";
+  if (NORMALIZED_WEIGHT_NUTRIENT_CODES.has(key)) return "g";
+  const rawUnit = text(contributorUnit)
+    ?.toLocaleLowerCase("en-US")
+    .replace(/[µμ]/g, "u")
+    .replace(/[._\s-]/g, "");
+  if (rawUnit) {
+    return /^(?:g|gram|grams|mg|milligram|milligrams|ug|mcg|microgram|micrograms|ng|nanogram|nanograms)$/.test(
+      rawUnit,
+    )
+      ? "g"
+      : null;
+  }
+  return null;
+}
+
 function convertedNutrient(
   nutriments: UnknownRecord,
   key: string,
@@ -68,15 +157,56 @@ function convertedNutrient(
 ): number | null {
   const value = nutrient(nutriments, key);
   if (value === null) return null;
-  const unit = text(nutriments[`${key}_unit`])?.toLocaleLowerCase("en-US");
-  if (target === "mg") {
-    if (unit === "g" || !unit) return value * 1_000;
-    if (unit === "µg" || unit === "μg" || unit === "mcg") return value / 1_000;
-    return value;
+  // Open Food Facts normalizes every weight-based `<nutrient>_100g` value to
+  // grams. `<nutrient>_unit` describes the contributor's raw entry and must
+  // not be applied to the already-normalized value.
+  return target === "mg" ? value * 1_000 : value * 1_000_000;
+}
+
+function quantityReferenceUnit(value: unknown): "g" | "ml" | null {
+  const normalized = text(value)
+    ?.toLocaleLowerCase("en-US")
+    .replace(/µ/g, "u")
+    .replace(/\./g, "");
+  if (!normalized) return null;
+  if (
+    /^(?:ml|milliliters?|millilitres?|cl|centiliters?|centilitres?|l|liters?|litres?)$/.test(
+      normalized,
+    ) ||
+    /\b(?:ml|milliliters?|millilitres?|cl|centiliters?|centilitres?|l|liters?|litres?|fl\s*oz|fluid\s+ounces?)\b/.test(
+      normalized,
+    )
+  ) {
+    return "ml";
   }
-  if (unit === "g" || !unit) return value * 1_000_000;
-  if (unit === "mg") return value * 1_000;
-  return value;
+  if (
+    /^(?:g|grams?|kg|kilograms?|oz|ounces?|lb|lbs|pounds?)$/.test(normalized) ||
+    /\b(?:g|grams?|kg|kilograms?|oz|ounces?|lb|lbs|pounds?)\b/.test(normalized)
+  ) {
+    return "g";
+  }
+  return null;
+}
+
+function nutritionReferenceUnit(
+  product: UnknownRecord,
+): "g" | "ml" | "unknown" {
+  // Open Food Facts uses the historical `100g` nutrition_data_per token for
+  // both 100 g solids and 100 mL liquids, so it cannot disambiguate the basis.
+  // Require all recognized package/serving hints to agree and fail closed when
+  // no dimensional hint exists.
+  const hints = new Set(
+    [
+      product.product_quantity_unit,
+      product.serving_quantity_unit,
+      product.quantity,
+      product.serving_size,
+    ].flatMap((value) => {
+      const unit = quantityReferenceUnit(value);
+      return unit ? [unit] : [];
+    }),
+  );
+  return hints.size === 1 ? [...hints][0]! : "unknown";
 }
 
 function ensureCoreNutrition(nutriments: UnknownRecord) {
@@ -109,8 +239,12 @@ function dynamicNutrients(nutriments: UnknownRecord) {
     if (amount === null) return [];
     const code = key.slice(0, -5).replace(/_/g, "-");
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(code) || seen.has(code)) return [];
+    const unit = canonicalNutrientUnit(
+      code,
+      nutriments[`${key.slice(0, -5)}_unit`],
+    );
+    if (!unit) return [];
     seen.add(code);
-    const unit = text(nutriments[`${key.slice(0, -5)}_unit`]) ?? "g";
     return [
       {
         code: `off-${code}`,
@@ -159,6 +293,7 @@ export function openFoodFactsCandidateFromProduct(
       product.image_nutrition_small_url,
       product.image_nutrition_url,
     ),
+    nutritionReferenceUnit: nutritionReferenceUnit(product),
     nutritionPreview: {
       calories:
         nutrient(nutriments, "energy-kcal") ??
@@ -209,6 +344,10 @@ export async function searchOpenFoodFactsProducts(
       "brands",
       "brand_owner",
       "quantity",
+      "product_quantity_unit",
+      "serving_size",
+      "serving_quantity_unit",
+      "nutrition_data_per",
       "image_front_small_url",
       "image_front_url",
       "image_nutrition_small_url",
@@ -262,8 +401,11 @@ export async function loadOpenFoodFactsProduct(
       "brands",
       "brand_owner",
       "quantity",
+      "product_quantity_unit",
       "serving_size",
       "serving_quantity",
+      "serving_quantity_unit",
+      "nutrition_data_per",
       "nutriments",
       "ingredients_text",
       "ingredients_text_en",
@@ -280,6 +422,18 @@ export async function loadOpenFoodFactsProduct(
     throw new ExternalFoodError("not_found", "No product uses that barcode.");
   }
   const candidate = openFoodFactsCandidateFromProduct(barcode, product);
+  if (candidate.nutritionReferenceUnit === "ml") {
+    throw new ExternalFoodError(
+      "unsupported_reference_unit",
+      "This liquid product is reported per 100 mL, which cannot be imported into gram-based plan math safely.",
+    );
+  }
+  if (candidate.nutritionReferenceUnit === "unknown") {
+    throw new ExternalFoodError(
+      "ambiguous_reference_unit",
+      "Open Food Facts does not identify whether this product's normalized nutrition is per 100 g or per 100 mL.",
+    );
+  }
   const nutriments = record(product.nutriments);
   const core = ensureCoreNutrition(nutriments);
   const brandName = candidate.brandName ?? "Brand not provided";

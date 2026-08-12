@@ -33,6 +33,15 @@ describe("onboarding public error taxonomy", () => {
     {
       provider: {
         code: "23514",
+        message:
+          "Onboarding is already completed and cannot be changed through setup.",
+      },
+      code: "ONBOARDING_ALREADY_COMPLETED",
+      status: 409,
+    },
+    {
+      provider: {
+        code: "23514",
         message: "Terms and privacy acceptance could not be proven.",
       },
       code: "LEGAL_ACCEPTANCE_REQUIRED",

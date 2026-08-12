@@ -12,8 +12,14 @@ import {
   Trash2,
 } from "lucide-react";
 import { AppReleaseCard } from "@/components/app-release-card";
+import { ApiErrorNotice } from "@/components/api-error-notice";
 import { AppearanceControl } from "@/components/appearance-control";
 import { FoodLabelUpload } from "@/components/food-label-upload";
+import {
+  apiErrorFromPayload,
+  clientApiError,
+} from "@/src/lib/client-api-error";
+import type { ApiError } from "@/src/lib/api-response";
 
 export type SettingsGoalType =
   | "fat_loss"
@@ -160,6 +166,7 @@ export function SettingsView({
   const router = useRouter();
   const [pending, setPending] = useState<PendingAction>(null);
   const [status, setStatus] = useState<StatusMessage>(null);
+  const [logoutError, setLogoutError] = useState<ApiError | null>(null);
   const [fullName, setFullName] = useState(initialData.profile.fullName);
   const [preferredWeightUnit, setPreferredWeightUnit] = useState(
     initialData.profile.preferredWeightUnit,
@@ -357,19 +364,28 @@ export function SettingsView({
   async function logout() {
     setPending("logout");
     setStatus(null);
+    setLogoutError(null);
+    const fallback = clientApiError(
+      "LOGOUT_UNAVAILABLE",
+      "Logout could not be completed.",
+      "Your session may still be active. Check the connection and try logging out again.",
+      {
+        retryable: true,
+        action: { kind: "retry", label: "Try logging out again" },
+      },
+    );
     try {
       const response = await fetch("/api/auth/logout", { method: "POST" });
-      if (!response.ok) throw new Error("Logout could not be completed.");
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        setLogoutError(apiErrorFromPayload(payload, fallback));
+        setPending(null);
+        return;
+      }
       router.replace("/login");
       router.refresh();
-    } catch (error) {
-      setStatus({
-        kind: "error",
-        text:
-          error instanceof Error
-            ? error.message
-            : "Logout could not be completed.",
-      });
+    } catch {
+      setLogoutError(fallback);
       setPending(null);
     }
   }
@@ -419,6 +435,14 @@ export function SettingsView({
         >
           <span>{status.text}</span>
         </div>
+      ) : null}
+      {logoutError ? (
+        <ApiErrorNotice
+          actionDisabled={pending !== null}
+          error={logoutError}
+          heading="You are still signed in."
+          onAction={() => void logout()}
+        />
       ) : null}
 
       <div className="settings-layout">
