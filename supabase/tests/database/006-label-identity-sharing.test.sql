@@ -1495,10 +1495,10 @@ set local role service_role;
 select ok(
   (
     public.application_health(
-      '20260802020000_share_label_by_product_identity'
+      '20260810050000_make_label_uploads_crash_recoverable'
     ) ->> 'migrationCompatible'
   )::boolean,
-  'application health accepts the complete enabled beta.3 database contract'
+  'application health accepts the complete enabled beta.4 database contract'
 );
 
 select is(
@@ -1518,7 +1518,7 @@ set local role service_role;
 select is(
   (
     public.application_health(
-      '20260802020000_share_label_by_product_identity'
+      '20260810050000_make_label_uploads_crash_recoverable'
     ) ->> 'migrationCompatible'
   )::boolean,
   false,

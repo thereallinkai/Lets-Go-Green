@@ -1,6 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const routeState = vi.hoisted(() => ({
+  authResult: {
+    data: {
+      user: { id: "11111111-1111-4111-8111-111111111111" } as {
+        id: string;
+      } | null,
+    },
+    error: null as {
+      code?: string;
+      message?: string;
+      name?: string;
+      status?: number;
+    } | null,
+  },
   rpc: vi.fn(),
   searchOpenFoodFactsProducts: vi.fn(),
   searchUsdaFoods: vi.fn(),
@@ -36,10 +49,7 @@ vi.mock("@/src/lib/external", () => ({
 vi.mock("@/src/lib/supabase/server", () => ({
   createSupabaseServerClient: async () => ({
     auth: {
-      getUser: async () => ({
-        data: { user: { id: "11111111-1111-4111-8111-111111111111" } },
-        error: null,
-      }),
+      getUser: async () => routeState.authResult,
     },
   }),
 }));
@@ -93,6 +103,7 @@ const offCandidate = {
   dataType: "Open Food Facts product",
   imageUrl: null,
   nutritionImageUrl: null,
+  nutritionReferenceUnit: "g" as const,
   nutritionPreview: {
     calories: 375,
     proteinGrams: 75,
@@ -159,6 +170,10 @@ const normalizedOffFood = {
 
 describe("external food lookup route", () => {
   beforeEach(() => {
+    routeState.authResult = {
+      data: { user: { id: "11111111-1111-4111-8111-111111111111" } },
+      error: null,
+    };
     routeState.rpc.mockReset();
     routeState.searchOpenFoodFactsProducts.mockReset();
     routeState.searchUsdaFoods.mockReset();
@@ -176,6 +191,31 @@ describe("external food lookup route", () => {
       }
       return { data: null, error: { code: "unexpected_rpc" } };
     });
+  });
+
+  it("classifies auth-js AuthSessionMissingError as a signed-out request", async () => {
+    routeState.authResult = {
+      data: { user: null },
+      error: {
+        name: "AuthSessionMissingError",
+        status: 400,
+        message: "Auth session missing!",
+      },
+    };
+
+    const response = await POST(
+      new Request("http://localhost/api/foods/lookup", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "search", query: "oats" }),
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(401);
+    expect(body.error.code).toBe("SESSION_EXPIRED");
+    expect(routeState.searchUsdaFoods).not.toHaveBeenCalled();
+    expect(routeState.searchOpenFoodFactsProducts).not.toHaveBeenCalled();
   });
 
   it("fans one smart search out to both providers and keeps partial results", async () => {
@@ -332,6 +372,42 @@ describe("external food lookup route", () => {
       action: { kind: "edit" },
     });
     expect(JSON.stringify(body)).not.toContain("internal_table_name");
+  });
+
+  it("explains why a per-100 mL source record cannot enter gram-based plan math", async () => {
+    routeState.loadOpenFoodFactsProduct.mockRejectedValue(
+      new ExternalFoodError(
+        "unsupported_reference_unit",
+        "unsafe provider diagnostic with internal_table_name",
+      ),
+    );
+
+    const response = await POST(
+      new Request("http://localhost/api/foods/lookup", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "import",
+          provider: "open_food_facts",
+          externalId: "748927022650",
+        }),
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(422);
+    expect(body.error).toMatchObject({
+      code: "FOOD_SOURCE_REFERENCE_UNIT_UNSUPPORTED",
+      message: "This liquid product is reported per 100 mL.",
+      retryable: false,
+      action: { kind: "edit" },
+    });
+    expect(body.error.details).toContain("per 100 g");
+    expect(JSON.stringify(body)).not.toContain("internal_table_name");
+    expect(routeState.rpc).not.toHaveBeenCalledWith(
+      "cache_external_food",
+      expect.anything(),
+    );
   });
 
   it("refetches an exact Open Food Facts record before caching an import", async () => {

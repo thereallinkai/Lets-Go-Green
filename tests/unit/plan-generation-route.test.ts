@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const routeState = vi.hoisted(() => ({
+  authResult: {
+    data: { user: { id: "user-1" } as { id: string } | null },
+    error: null as unknown,
+  },
   providerGenerate: vi.fn(),
   requestUpdate: vi.fn(),
+  serverError: false,
 }));
 
 vi.mock("@/src/lib/env", () => ({
@@ -92,39 +97,44 @@ function warningsQuery() {
 }
 
 vi.mock("@/src/lib/supabase/server", () => ({
-  createSupabaseServerClient: async () => ({
-    auth: {
-      getUser: vi.fn().mockResolvedValue({
-        data: { user: { id: "user-1" } },
-        error: null,
+  createSupabaseServerClient: async () => {
+    if (routeState.serverError) throw new Error("private server failure");
+    return {
+      auth: {
+        getUser: vi.fn().mockResolvedValue(routeState.authResult),
+      },
+      from: vi.fn((table: string) => {
+        if (table === "profiles") return profileQuery();
+        if (table === "goals") return goalQuery();
+        if (table === "weight_entries") {
+          return orderedQuery([
+            {
+              id: "weight-1",
+              weight_kg: 80,
+              is_onboarding_baseline: true,
+            },
+          ]);
+        }
+        if (table === "meal_preferences") return orderedQuery([]);
+        if (table === "onboarding_warnings") return warningsQuery();
+        throw new Error(`Unexpected test table: ${table}`);
       }),
-    },
-    from: vi.fn((table: string) => {
-      if (table === "profiles") return profileQuery();
-      if (table === "goals") return goalQuery();
-      if (table === "weight_entries") {
-        return orderedQuery([
-          {
-            id: "weight-1",
-            weight_kg: 80,
-            is_onboarding_baseline: true,
-          },
-        ]);
-      }
-      if (table === "meal_preferences") return orderedQuery([]);
-      if (table === "onboarding_warnings") return warningsQuery();
-      throw new Error(`Unexpected test table: ${table}`);
-    }),
-    rpc: vi.fn(),
-  }),
+      rpc: vi.fn(),
+    };
+  },
 }));
 
 import { POST } from "../../app/api/plans/generate/route";
 
 describe("POST plan generation route", () => {
   beforeEach(() => {
+    routeState.authResult = {
+      data: { user: { id: "user-1" } },
+      error: null,
+    };
     routeState.providerGenerate.mockReset();
     routeState.requestUpdate.mockReset();
+    routeState.serverError = false;
     routeState.requestUpdate.mockReturnValue({
       eq: vi.fn().mockReturnValue({
         eq: vi.fn().mockResolvedValue({ error: null }),
@@ -155,4 +165,52 @@ describe("POST plan generation route", () => {
       }),
     );
   });
+
+  it("returns a signed-out error for Supabase's missing-session result", async () => {
+    routeState.authResult = {
+      data: { user: null },
+      error: { name: "AuthSessionMissingError", status: 400 },
+    };
+
+    const response = await POST(
+      new Request("http://localhost/api/plans/generate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ idempotencyKey: "missing-session-1" }),
+      }),
+    );
+
+    expect(response.status).toBe(401);
+    expect((await response.json()).error.code).toBe("SESSION_EXPIRED");
+  });
+
+  it.each(["auth", "client"])(
+    "returns a structured retryable error for a %s service failure",
+    async (kind) => {
+      if (kind === "client") {
+        routeState.serverError = true;
+      } else {
+        routeState.authResult = {
+          data: { user: null },
+          error: { name: "AuthRetryableFetchError", status: 0 },
+        };
+      }
+
+      const response = await POST(
+        new Request("http://localhost/api/plans/generate", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ idempotencyKey: `service-failure-${kind}` }),
+        }),
+      );
+      const result = await response.json();
+
+      expect(response.status).toBe(503);
+      expect(result.error).toMatchObject({
+        code: "PLAN_AUTH_UNAVAILABLE",
+        retryable: true,
+      });
+      expect(JSON.stringify(result)).not.toContain("private");
+    },
+  );
 });

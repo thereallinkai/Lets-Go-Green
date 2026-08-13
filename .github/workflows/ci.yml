@@ -70,6 +70,9 @@ jobs:
             "$diagnostic"
           exit 1
 
+      - name: Audit dependency security
+        run: npm run audit:security
+
       - name: Check generated database type drift
         run: npm run db:types:check
 

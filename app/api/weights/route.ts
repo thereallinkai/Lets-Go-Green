@@ -1,8 +1,14 @@
 import { z } from "zod";
 import { convertWeight, localDateInTimeZone, parseLocalDate } from "@/src/lib/domain";
-import { apiError, apiSuccess } from "@/src/lib/api-response";
+import { apiError, apiSuccess, publicError } from "@/src/lib/api-response";
+import { isAuthSessionMissing } from "@/src/lib/auth-error-taxonomy";
 import { isDevelopmentDemo } from "@/src/lib/env";
 import { createSupabaseServerClient } from "@/src/lib/supabase/server";
+import {
+  isProtectedBaselineError,
+  weightAuthUnavailable,
+  weightProfileUnavailable,
+} from "@/src/lib/weight-entry-errors";
 
 const entrySchema = z
   .object({
@@ -12,25 +18,49 @@ const entrySchema = z
   })
   .strict();
 
-async function authContext() {
+async function userContext() {
   const supabase = await createSupabaseServerClient();
-  const { data } = await supabase.auth.getUser();
-  if (!data.user) return { supabase, user: null, timeZone: "UTC" };
-  const { data: profile } = await supabase
+  const { data, error: authError } = await supabase.auth.getUser();
+  return { supabase, user: data.user, authError };
+}
+
+async function datedUserContext() {
+  const context = await userContext();
+  if (context.authError || !context.user) {
+    return { ...context, timeZone: null, profileError: null };
+  }
+  const { data: profile, error: profileError } = await context.supabase
     .from("profiles")
     .select("time_zone")
-    .eq("user_id", data.user.id)
+    .eq("user_id", context.user.id)
     .maybeSingle();
-  return { supabase, user: data.user, timeZone: profile?.time_zone ?? "UTC" };
+  return {
+    ...context,
+    timeZone: profile?.time_zone ?? null,
+    profileError,
+  };
 }
 
 export async function GET(request: Request) {
   if (isDevelopmentDemo()) return apiSuccess([]);
   try {
-    const { supabase, user } = await authContext();
-    if (!user) return apiError("SESSION_EXPIRED", "Log in to view weight entries.", 401);
+    const { supabase, user, authError } = await userContext();
+    if (authError && !isAuthSessionMissing(authError)) {
+      return publicError(weightAuthUnavailable());
+    }
+    if (!user || isAuthSessionMissing(authError)) {
+      return apiError("SESSION_EXPIRED", "Log in to view weight entries.", 401);
+    }
     const url = new URL(request.url);
-    const limit = Math.min(365, Math.max(1, Number(url.searchParams.get("limit") ?? 90)));
+    const requestedLimit = Number(url.searchParams.get("limit") ?? 90);
+    if (!Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > 365) {
+      return apiError(
+        "INVALID_WEIGHT_LIMIT",
+        "Choose a whole-number weight-history limit from 1 through 365.",
+        422,
+      );
+    }
+    const limit = requestedLimit;
     const { data, error } = await supabase
       .from("weight_entries")
       .select("*")
@@ -61,24 +91,48 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { supabase, user, timeZone } = await authContext();
-    if (!user) return apiError("SESSION_EXPIRED", "Log in to save weight entries.", 401);
+    const { supabase, user, authError, timeZone, profileError } =
+      await datedUserContext();
+    if (authError && !isAuthSessionMissing(authError)) {
+      return publicError(weightAuthUnavailable());
+    }
+    if (!user || isAuthSessionMissing(authError)) {
+      return apiError("SESSION_EXPIRED", "Log in to save weight entries.", 401);
+    }
+    if (profileError) return publicError(weightProfileUnavailable());
+    if (!timeZone) {
+      return apiError(
+        "PROFILE_REQUIRED",
+        "Complete your profile before saving weight entries.",
+        409,
+        {
+          details: "A saved time zone is required for local-date validation.",
+          retryable: false,
+          action: { kind: "navigate", label: "Open profile", href: "/profile" },
+        },
+      );
+    }
     if (parsed.data.localDate > localDateInTimeZone(new Date(), timeZone)) {
       return apiError("FUTURE_WEIGHT_DISABLED", "A weight entry cannot use a future local date.", 409);
     }
-    const { data, error } = await supabase
-      .from("weight_entries")
-      .upsert(
+    const { data, error } = await supabase.rpc("save_weight_entry", {
+      entry_date: parsed.data.localDate,
+      entry_weight_kg: weightKg,
+      entry_source_display_unit: parsed.data.unit,
+    });
+    if (isProtectedBaselineError(error)) {
+      return apiError(
+        "BASELINE_WEIGHT_IMMUTABLE",
+        "Your onboarding starting weight is protected.",
+        409,
         {
-          user_id: user.id,
-          local_date: parsed.data.localDate,
-          weight_kg: weightKg,
-          source_display_unit: parsed.data.unit,
+          details:
+            "Keep the original starting point and add a new reading on another local date.",
+          retryable: false,
+          action: { kind: "edit", label: "Use another date" },
         },
-        { onConflict: "user_id,local_date" },
-      )
-      .select()
-      .single();
+      );
+    }
     if (error) return apiError("WEIGHT_SAVE_FAILED", "The weight entry could not be saved.", 500);
     return apiSuccess(data, 201);
   } catch {

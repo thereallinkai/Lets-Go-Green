@@ -57,6 +57,9 @@ describe("PlanView generation", () => {
     expect(
       screen.getByRole("button", { name: "Generate new draft" }),
     ).toBeEnabled();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Error code: PLAN_GENERATION_UNAVAILABLE",
+    );
     expect(screen.getByText("Plan version 2 · Accepted July 20")).toBeInTheDocument();
     expect(screen.getByText("Rolled oats")).toBeInTheDocument();
     expect(
@@ -90,6 +93,9 @@ describe("PlanView generation", () => {
     expect(
       screen.queryByRole("button", { name: "Accept this version" }),
     ).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Error code: PLAN_RESPONSE_INVALID",
+    );
     expect(screen.getByText("Rolled oats")).toBeInTheDocument();
   });
 

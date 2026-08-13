@@ -40,6 +40,7 @@ export default async function ProgressPage() {
     date: format(parseISO(entry.local_date), "MMM d"),
     isoDate: entry.local_date,
     kg: entry.weight_kg,
+    isBaseline: entry.is_onboarding_baseline,
   }));
   const baseline =
     (weights.data ?? []).find((entry) => entry.is_onboarding_baseline)

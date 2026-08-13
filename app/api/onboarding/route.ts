@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { Database, Json } from "@/src/types/database";
 import { localDateInTimeZone } from "@/src/lib/domain";
 import { apiError, apiSuccess, publicError } from "@/src/lib/api-response";
+import { isAuthSessionMissing } from "@/src/lib/auth-error-taxonomy";
 import { isDevelopmentDemo } from "@/src/lib/env";
 import {
   classifyOnboardingCompletionError,
@@ -113,7 +114,12 @@ async function requireUser() {
   try {
     const supabase = await createSupabaseServerClient();
     const { data, error } = await supabase.auth.getUser();
-    return { supabase, user: data.user, authError: error };
+    return {
+      supabase,
+      user: data.user,
+      authError: error,
+      sessionMissing: isAuthSessionMissing(error),
+    };
   } catch {
     throw new AuthLookupUnavailableError();
   }
@@ -165,11 +171,11 @@ export async function GET() {
     return apiSuccess({ currentStep: null, draft: null, updatedAt: null });
   }
   try {
-    const { supabase, user, authError } = await requireUser();
-    if (authError) {
+    const { supabase, user, authError, sessionMissing } = await requireUser();
+    if (authError && !sessionMissing) {
       return authServiceUnavailable("load");
     }
-    if (!user) {
+    if (sessionMissing || !user) {
       return apiError("SESSION_EXPIRED", "Log in to resume onboarding.", 401, {
         details: "Any browser-saved onboarding information is unchanged.",
         retryable: false,
@@ -208,11 +214,11 @@ export async function PATCH(request: Request) {
   }
   if (isDevelopmentDemo()) return apiSuccess({ saved: true, updatedAt: null });
   try {
-    const { supabase, user, authError } = await requireUser();
-    if (authError) {
+    const { supabase, user, authError, sessionMissing } = await requireUser();
+    if (authError && !sessionMissing) {
       return authServiceUnavailable("save");
     }
-    if (!user) {
+    if (sessionMissing || !user) {
       return apiError("SESSION_EXPIRED", "Log in to save onboarding progress.", 401, {
         details: "The browser copy of your information is unchanged.",
         retryable: false,
@@ -330,6 +336,23 @@ export async function PUT(request: Request) {
   if (isDevelopmentDemo()) return apiSuccess({ completed: true, goalId: "demo-goal" });
 
   try {
+    const { supabase, user, authError, sessionMissing } = await requireUser();
+    if (authError && !sessionMissing) {
+      return authServiceUnavailable("save");
+    }
+    if (sessionMissing || !user) {
+      return apiError(
+        "SESSION_EXPIRED",
+        "Log in to complete onboarding.",
+        401,
+        {
+          details: "The current onboarding information is unchanged.",
+          retryable: false,
+          action: { kind: "navigate", label: "Log in", href: "/login" },
+        },
+      );
+    }
+
     const preferences = (["breakfast", "lunch", "dinner"] as const).flatMap((mealType) =>
       parsed.data.meals[mealType].map((slug, sortOrder) => ({
         mealType,
@@ -420,7 +443,6 @@ export async function PUT(request: Request) {
 
     // PostgreSQL accepts NULL for these nullable parameters. Supabase CLI
     // 2.109.1 omits those null unions from its generated RPC argument type.
-    const supabase = await createSupabaseServerClient();
     const rpc = supabase.rpc.bind(supabase) as unknown as (
       name: string,
       args: CompleteOnboardingFromSlugsArgs,
@@ -441,7 +463,10 @@ export async function PUT(request: Request) {
       );
     }
     return apiSuccess({ completed: true, goalId });
-  } catch {
+  } catch (error) {
+    if (error instanceof AuthLookupUnavailableError) {
+      return authServiceUnavailable("save");
+    }
     console.error("complete_onboarding transport unavailable");
     return publicError(onboardingTransportError("complete"));
   }

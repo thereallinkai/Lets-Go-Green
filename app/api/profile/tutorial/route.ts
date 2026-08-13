@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { apiError, apiSuccess } from "@/src/lib/api-response";
+import { isAuthSessionMissing } from "@/src/lib/auth-error-taxonomy";
 import { isDevelopmentDemo } from "@/src/lib/env";
 import { CURRENT_PRODUCT_TOUR_VERSION } from "@/src/lib/product-tour";
 import { createSupabaseServerClient } from "@/src/lib/supabase/server";
@@ -31,7 +32,19 @@ export async function PATCH(request: Request) {
   try {
     const supabase = await createSupabaseServerClient();
     const { data: auth, error: authError } = await supabase.auth.getUser();
-    if (authError || !auth.user) {
+    if (authError && !isAuthSessionMissing(authError)) {
+      return apiError(
+        "TUTORIAL_AUTH_UNAVAILABLE",
+        "Your session could not be checked before saving tutorial progress.",
+        503,
+        {
+          details: "Tutorial progress was not changed. Check the connection and try again.",
+          retryable: true,
+          action: { kind: "retry", label: "Try saving again" },
+        },
+      );
+    }
+    if (!auth.user || isAuthSessionMissing(authError)) {
       return apiError(
         "SESSION_EXPIRED",
         "Log in again before saving tutorial progress.",

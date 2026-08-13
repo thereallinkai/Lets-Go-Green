@@ -112,4 +112,49 @@ describe("CalendarView six-slot check-ins", () => {
       notes: "Updated note",
     });
   });
+
+  it("shows a safe structured persistence error visibly", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: false,
+        json: async () => ({
+          data: null,
+          error: {
+            code: "CHECKIN_PROFILE_UNAVAILABLE",
+            message: "Your time zone could not be checked before saving.",
+            details: "No check-in data was changed.",
+            retryable: true,
+            action: { kind: "retry", label: "Try saving again" },
+          },
+        }),
+      })),
+    );
+    const user = userEvent.setup();
+    render(
+      <CalendarView
+        initialMonth="2026-07"
+        initialSelectedDate="2026-07-24"
+        initialCheckins={[
+          {
+            localDate: "2026-07-24",
+            notes: "Existing",
+            slots: normalizeMealSlotCheckins([]),
+          },
+        ]}
+      />,
+    );
+
+    const note = screen.getByRole("textbox", { name: "Optional note" });
+    await user.clear(note);
+    await user.type(note, "Unsaved change");
+    await user.click(screen.getByRole("button", { name: "Save note" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(
+      "Your time zone could not be checked before saving.",
+    );
+    expect(alert).toHaveTextContent("Error code: CHECKIN_PROFILE_UNAVAILABLE");
+    expect(note).toHaveValue("Existing");
+  });
 });

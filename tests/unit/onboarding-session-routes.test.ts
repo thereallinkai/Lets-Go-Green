@@ -5,7 +5,12 @@ const routeState = vi.hoisted(() => ({
   authThrow: null as Error | null,
   authResult: {
     data: { user: { id: "user-1" } as { id: string } | null },
-    error: null as { code?: string; message?: string } | null,
+    error: null as {
+      code?: string;
+      message?: string;
+      name?: string;
+      status?: number;
+    } | null,
   },
   readResult: {
     data: null as Record<string, unknown> | null,
@@ -163,6 +168,36 @@ describe("onboarding draft session routes", () => {
     expect(result.error.message.toLowerCase()).toContain(wording);
     expect(routeState.from).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["GET", () => GET(), "resume"],
+    ["PATCH", () => PATCH(patchRequest()), "save"],
+  ])(
+    "maps AuthSessionMissingError in %s to the signed-out response",
+    async (_method, invoke, wording) => {
+      routeState.authResult = {
+        data: { user: null },
+        error: {
+          name: "AuthSessionMissingError",
+          status: 400,
+          message: "private auth-js detail",
+        },
+      };
+
+      const response = await invoke();
+      const result = await response.json();
+
+      expect(response.status).toBe(401);
+      expect(result.error).toMatchObject({
+        code: "SESSION_EXPIRED",
+        retryable: false,
+        action: { href: "/login" },
+      });
+      expect(result.error.message.toLowerCase()).toContain(wording);
+      expect(JSON.stringify(result)).not.toContain("private auth-js");
+      expect(routeState.from).not.toHaveBeenCalled();
+    },
+  );
 
   it("returns the server draft timestamp when loading", async () => {
     routeState.readResult = {

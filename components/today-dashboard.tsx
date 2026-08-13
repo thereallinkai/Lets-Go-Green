@@ -27,7 +27,14 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { ApiErrorNotice } from "@/components/api-error-notice";
 import { NutritionFactsCard } from "@/components/nutrition-facts-card";
+import type { ApiError } from "@/src/lib/api-response";
+import {
+  apiErrorFromResponse,
+  apiErrorFromThrown,
+  clientApiError,
+} from "@/src/lib/client-api-error";
 import {
   MEAL_SLOT_LABELS,
   MEAL_SLOTS,
@@ -152,6 +159,7 @@ export function TodayDashboard({
     initialCheckins ?? fallbackCheckins,
   );
   const [announcement, setAnnouncement] = useState("");
+  const [operationError, setOperationError] = useState<ApiError | null>(null);
   const [saving, setSaving] = useState<MealSlot | null>(null);
   const [skipEditor, setSkipEditor] = useState<MealSlot | null>(null);
   const [skipReason, setSkipReason] = useState("");
@@ -210,6 +218,13 @@ export function TodayDashboard({
       return;
     }
     const previous = checkins;
+    const fallback = clientApiError(
+      "CHECKIN_SAVE_UNAVAILABLE",
+      "The meal status could not be saved.",
+      "Your previous status was restored. Check the connection and try again.",
+      { retryable: true, action: { kind: "retry", label: "Try again" } },
+    );
+    setOperationError(null);
     const desired = checkins.map((checkin) =>
       checkin.mealType === meal
         ? {
@@ -234,31 +249,48 @@ export function TodayDashboard({
           skipReason: status === "skipped" ? reason : null,
         }),
       });
-      if (!response.ok) throw new Error("save_failed");
+      if (!response.ok) {
+        throw await apiErrorFromResponse(response, fallback);
+      }
       setSkipEditor(null);
       setSkipReason("");
       setAnnouncement(
         `${label} is now ${status.replace("_", " ")}.`,
       );
-    } catch {
+    } catch (error) {
+      const publicError = apiErrorFromThrown(error, fallback);
       setCheckins(previous);
-      setAnnouncement(`We could not save ${label}. Your previous status was restored.`);
+      setOperationError(publicError);
+      setAnnouncement(
+        `We could not save ${label}. Your previous status was restored.`,
+      );
     } finally {
       setSaving(null);
     }
   }
 
   async function loadFoods(query = "") {
+    const fallback = clientApiError(
+      "FOOD_CATALOG_UNAVAILABLE",
+      "The food catalog could not be loaded.",
+      "No food was added. Check the connection and try the search again.",
+      { retryable: true, action: { kind: "retry", label: "Search again" } },
+    );
+    setOperationError(null);
     setCatalogLoading(true);
     try {
       const response = await fetch(
         `/api/foods?q=${encodeURIComponent(query.trim())}`,
       );
-      if (!response.ok) throw new Error("load_failed");
+      if (!response.ok) {
+        throw await apiErrorFromResponse(response, fallback);
+      }
       const result = (await response.json()) as { data?: CatalogFood[] };
       setCatalogFoods(result.data ?? []);
-    } catch {
+    } catch (error) {
+      const publicError = apiErrorFromThrown(error, fallback);
       setCatalogFoods([]);
+      setOperationError(publicError);
       setAnnouncement("The food catalog could not be loaded. Please try again.");
     } finally {
       setCatalogLoading(false);
@@ -279,6 +311,13 @@ export function TodayDashboard({
   async function addFood(mealType: MealSlot, food: CatalogFood) {
     if (saving) return;
     setSaving(mealType);
+    setOperationError(null);
+    const fallback = clientApiError(
+      "MEAL_ITEM_SAVE_UNAVAILABLE",
+      `${food.english_name} could not be added.`,
+      "No food record was changed. Check the connection and try again.",
+      { retryable: true, action: { kind: "retry", label: "Try adding again" } },
+    );
     const localDay = localDateInTimeZone(new Date(), timeZone);
     try {
       const response = await fetch(`/api/checkins/${localDay}/items`, {
@@ -286,7 +325,9 @@ export function TodayDashboard({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ mealType, foodId: food.id }),
       });
-      if (!response.ok) throw new Error("save_failed");
+      if (!response.ok) {
+        throw await apiErrorFromResponse(response, fallback);
+      }
       const result = (await response.json()) as {
         data?: {
           id?: string;
@@ -327,7 +368,9 @@ export function TodayDashboard({
       setAnnouncement(
         `${food.english_name} was added to ${MEAL_SLOT_LABELS[mealType]}.`,
       );
-    } catch {
+    } catch (error) {
+      const publicError = apiErrorFromThrown(error, fallback);
+      setOperationError(publicError);
       setAnnouncement(
         `${food.english_name} could not be added. No food record was changed.`,
       );
@@ -339,6 +382,13 @@ export function TodayDashboard({
   async function removeFood(mealType: MealSlot, item: TodayMealItem) {
     if (saving) return;
     setSaving(mealType);
+    setOperationError(null);
+    const fallback = clientApiError(
+      "MEAL_ITEM_DELETE_UNAVAILABLE",
+      `${item.name} could not be removed.`,
+      "The food record remains. Check the connection and try again.",
+      { retryable: true, action: { kind: "retry", label: "Try removing again" } },
+    );
     const localDay = localDateInTimeZone(new Date(), timeZone);
     const currentMeal = checkinFor(mealType);
     const isFinalRecordedSnack =
@@ -353,7 +403,9 @@ export function TodayDashboard({
         `/api/checkins/${localDay}/items/${encodeURIComponent(item.id)}`,
         { method: "DELETE" },
       );
-      if (!response.ok) throw new Error("delete_failed");
+      if (!response.ok) {
+        throw await apiErrorFromResponse(response, fallback);
+      }
 
       setCheckins((current) =>
         current.map((checkin) =>
@@ -376,7 +428,9 @@ export function TodayDashboard({
           isFinalRecordedSnack ? " The empty snack is now not marked." : ""
         }`,
       );
-    } catch {
+    } catch (error) {
+      const publicError = apiErrorFromThrown(error, fallback);
+      setOperationError(publicError);
       setAnnouncement(
         `${item.name} could not be removed. The food record remains.`,
       );
@@ -401,6 +455,13 @@ export function TodayDashboard({
           <Scale size={17} aria-hidden="true" /> Add today&apos;s weight
         </Link>
       </header>
+
+      {operationError ? (
+        <ApiErrorNotice
+          error={operationError}
+          heading="We could not complete that action"
+        />
+      ) : null}
 
       <div className="today-grid">
         <section className="today-primary" aria-label="Today's meals and status">

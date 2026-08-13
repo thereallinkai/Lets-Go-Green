@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { apiError, apiSuccess } from "@/src/lib/api-response";
+import { isAuthSessionMissing } from "@/src/lib/auth-error-taxonomy";
 import { getServerEnv, isDevelopmentDemo } from "@/src/lib/env";
 import {
   ExternalFoodError,
@@ -77,6 +78,32 @@ function providerError(error: unknown) {
       {
         details:
           "Calories, protein, carbohydrate, and fat must all be present before source review. Choose another match or add the exact package label.",
+        retryable: false,
+        action: { kind: "edit", label: "Choose another food or label" },
+      },
+    );
+  }
+  if (error.code === "unsupported_reference_unit") {
+    return apiError(
+      "FOOD_SOURCE_REFERENCE_UNIT_UNSUPPORTED",
+      "This liquid product is reported per 100 mL.",
+      422,
+      {
+        details:
+          "The current plan engine calculates mass-based foods per 100 g, so importing this record would produce incorrect nutrition totals. Nothing was imported. Choose another record, or use the package-label workflow when the label provides a serving weight in grams.",
+        retryable: false,
+        action: { kind: "edit", label: "Choose another food or label" },
+      },
+    );
+  }
+  if (error.code === "ambiguous_reference_unit") {
+    return apiError(
+      "FOOD_SOURCE_REFERENCE_UNIT_AMBIGUOUS",
+      "This product's nutrition basis is unclear.",
+      422,
+      {
+        details:
+          "The source does not identify whether its normalized values are per 100 g or per 100 mL. Nothing was imported because guessing would produce incorrect nutrition totals. Choose another record or use a package label that provides a serving weight in grams.",
         retryable: false,
         action: { kind: "edit", label: "Choose another food or label" },
       },
@@ -212,7 +239,7 @@ export async function POST(request: Request) {
   try {
     const supabase = await createSupabaseServerClient();
     const { data: auth, error: authError } = await supabase.auth.getUser();
-    if (authError) {
+    if (authError && !isAuthSessionMissing(authError)) {
       return apiError(
         "FOOD_LOOKUP_AUTH_UNAVAILABLE",
         "Your session could not be checked for food search.",
@@ -224,7 +251,7 @@ export async function POST(request: Request) {
         },
       );
     }
-    if (!auth.user) {
+    if (!auth.user || isAuthSessionMissing(authError)) {
       return apiError(
         "SESSION_EXPIRED",
         "Log in before looking up external foods.",

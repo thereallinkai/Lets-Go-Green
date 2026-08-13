@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyAuthError,
   duplicateSignupResult,
+  isAuthSessionMissing,
 } from "../../src/lib/auth-error-taxonomy";
 
 describe("authentication public error taxonomy", () => {
@@ -112,6 +113,21 @@ describe("authentication public error taxonomy", () => {
     expect(JSON.stringify({ network, service })).not.toContain("private");
   });
 
+  it("keeps a retryable verification attempt on the current code", () => {
+    const result = classifyAuthError(
+      { code: "unexpected_verification_failure" },
+      "verify_email",
+    );
+
+    expect(result).toMatchObject({
+      code: "VERIFICATION_UNAVAILABLE",
+      retryable: true,
+      action: { kind: "retry", label: "Try again" },
+    });
+    expect(result.details).toContain("same verification");
+    expect(result.details).toContain("only if the current code");
+  });
+
   it("returns operation-specific rate-limit and session repair codes", () => {
     expect(
       classifyAuthError({ status: 429 }, "request_recovery").code,
@@ -126,6 +142,34 @@ describe("authentication public error taxonomy", () => {
       status: 401,
       action: { href: "/forgot-password" },
     });
+    expect(
+      classifyAuthError(
+        { name: "AuthSessionMissingError", status: 400 },
+        "update_password",
+      ),
+    ).toMatchObject({
+      code: "SESSION_EXPIRED",
+      status: 401,
+      action: { href: "/forgot-password" },
+    });
+  });
+
+  it("recognizes structural missing-session errors without treating service failures as signed out", () => {
+    expect(
+      isAuthSessionMissing({
+        name: "AuthSessionMissingError",
+        status: 400,
+      }),
+    ).toBe(true);
+    expect(isAuthSessionMissing({ code: "refresh_token_not_found" })).toBe(
+      true,
+    );
+    expect(
+      isAuthSessionMissing({
+        name: "AuthRetryableFetchError",
+        status: 503,
+      }),
+    ).toBe(false);
   });
 
   it("recognizes Supabase's intentionally obfuscated duplicate-signup result", () => {

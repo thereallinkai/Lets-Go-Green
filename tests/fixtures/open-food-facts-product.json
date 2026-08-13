@@ -25,7 +25,26 @@
       "fiber_100g": 15,
       "fiber_unit": "g",
       "sodium_100g": 0.2,
-      "sodium_unit": "g"
+      "sodium_unit": "mg",
+      "cholesterol_100g": 0.012,
+      "cholesterol_unit": "mg",
+      "potassium_100g": 0.45,
+      "potassium_unit": "mg",
+      "calcium_100g": 0.1,
+      "calcium_unit": "mg",
+      "iron_100g": 0.003,
+      "iron_unit": "mg",
+      "vitamin-d_100g": 0.000005,
+      "vitamin-d_unit": "mcg",
+      "choline_100g": 0.015,
+      "choline_unit": "mg",
+      "vitamin-a_100g": 100,
+      "vitamin-a_unit": "IU",
+      "alcohol_100g": 5,
+      "alcohol_unit": "% vol",
+      "nova-group_100g": 4,
+      "fruits-vegetables-nuts-estimate-from-ingredients_100g": 55,
+      "fruits-vegetables-nuts-estimate-from-ingredients_unit": "%"
     }
   }
 }

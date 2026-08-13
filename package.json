@@ -1,6 +1,6 @@
 {
   "name": "lets-go-green",
-  "version": "1.0.0-beta.3",
+  "version": "1.0.0-beta.4",
   "private": true,
   "description": "Let's Go Green! is a calm, safety-aware meal planning and habit tracking application.",
   "license": "UNLICENSED",
@@ -31,9 +31,10 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "build": "next build",
+    "audit:security": "npm audit --audit-level=high",
     "start": "next start --hostname 0.0.0.0",
-    "verify:app": "npm run typecheck && npm run lint && npm run test && npm run build && npm run test:e2e",
-    "verify": "npm run typecheck && npm run lint && npm run test && npm run test:db && npm run db:types:check && npm run build && npm run test:e2e",
+    "verify:app": "npm run audit:security && npm run typecheck && npm run lint && npm run test && npm run build && npm run test:e2e",
+    "verify": "npm run audit:security && npm run typecheck && npm run lint && npm run test && npm run test:db && npm run db:types:check && npm run build && npm run test:e2e",
     "db:reset": "./scripts/db-reset",
     "db:types": "./scripts/generate-database-types > src/types/database.ts",
     "db:types:check": "./scripts/check-database-types",
@@ -93,9 +94,11 @@
     "vitest": "4.1.10"
   },
   "overrides": {
+    "brace-expansion": "5.0.9",
     "next": "16.2.11",
     "fast-uri": "4.1.1",
     "js-yaml": "5.2.2",
+    "nanoid": "3.3.18",
     "postcss": "8.5.23",
     "react-server-dom-webpack": "19.2.8",
     "sharp": "0.35.3",

@@ -33,6 +33,7 @@ const offCandidate = {
   imageUrl:
     "https://images.openfoodfacts.org/images/products/748/927/022/650/front_en.12.200.jpg",
   nutritionImageUrl: null,
+  nutritionReferenceUnit: "g" as const,
   nutritionPreview: {
     calories: 375,
     proteinGrams: 75,
@@ -52,12 +53,33 @@ const usdaAsparagus = {
   dataType: "Foundation",
   imageUrl: null,
   nutritionImageUrl: null,
+  nutritionReferenceUnit: "g" as const,
   nutritionPreview: {
     calories: 20,
     proteinGrams: 2.2,
     carbohydrateGrams: 3.9,
     fatGrams: 0.1,
   },
+};
+
+const offLiquidCandidate = {
+  ...offCandidate,
+  externalId: "5555555555555",
+  displayName: "Example Brand — Tomato juice",
+  productName: "Tomato juice",
+  gtin: "5555555555555",
+  imageUrl: null,
+  nutritionReferenceUnit: "ml" as const,
+};
+
+const offUnknownBasisCandidate = {
+  ...offCandidate,
+  externalId: "6666666666666",
+  displayName: "Example Brand — Mystery drink",
+  productName: "Mystery drink",
+  gtin: "6666666666666",
+  imageUrl: null,
+  nutritionReferenceUnit: "unknown" as const,
 };
 
 function jsonResponse(data: unknown, status = 200) {
@@ -116,7 +138,13 @@ describe("FoodSearchPicker smart discovery", () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
         kind: "candidates",
-        candidates: [unrelatedBranded, usdaAsparagus, offCandidate],
+        candidates: [
+          unrelatedBranded,
+          usdaAsparagus,
+          offCandidate,
+          offLiquidCandidate,
+          offUnknownBasisCandidate,
+        ],
         providers: [
           { provider: "usda_fdc", status: "ok", resultCount: 1, message: null },
           {
@@ -179,6 +207,18 @@ describe("FoodSearchPicker smart discovery", () => {
       }),
     ).toHaveAttribute("src", offCandidate.imageUrl);
     expect(container.querySelector('[data-layout="overflow-safe-food-search"]')).toBeTruthy();
+    expect(within(results).getByText("Per 100 mL:")).toBeInTheDocument();
+    expect(
+      within(results).getByText("Per 100 g or mL (source unclear):"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: `Nutrition-basis import unavailable for ${offLiquidCandidate.displayName}`,
+      }),
+    ).toBeDisabled();
+    expect(
+      within(results).getByText(/cannot enter gram-based plan math safely/i),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/barcode/i)).not.toBeInTheDocument();
 
     fireEvent.change(input, { target: { value: "" } });

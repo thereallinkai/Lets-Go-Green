@@ -170,6 +170,8 @@ type StoredDraft = {
   draft: Partial<Draft>;
   savedAt: number;
   currentStep: number | null;
+  onboardingCompleted: boolean;
+  generationKey: string | null;
 };
 
 const fallbackFoods: Food[] = DEMO_CATALOG.map((food) => ({
@@ -203,6 +205,7 @@ type ApiFailure = {
 
 type OnboardingErrorContext =
   | "verify"
+  | "resume-verify"
   | "resend"
   | "save-draft"
   | "complete-today"
@@ -327,16 +330,25 @@ function parseStoredDraft(raw: string): StoredDraft {
       envelope.currentStep <= 6
         ? envelope.currentStep
         : null;
+    const generationKey =
+      typeof envelope.generationKey === "string" &&
+      /^[A-Za-z0-9._:-]{8,128}$/.test(envelope.generationKey)
+        ? envelope.generationKey
+        : null;
     return {
       draft: normalizeRestoredDraft(envelope.draft),
       savedAt,
       currentStep,
+      onboardingCompleted: envelope.onboardingCompleted === true,
+      generationKey,
     };
   }
   return {
     draft: normalizeRestoredDraft(parsed),
     savedAt: 0,
     currentStep: null,
+    onboardingCompleted: false,
+    generationKey: null,
   };
 }
 
@@ -559,6 +571,16 @@ const errorCodeFields: Record<string, keyof typeof fieldFocusTargets> = {
   TOO_MANY_RESTRICTIONS: "restrictions",
 };
 
+const VERIFIED_PROFILE_RECOVERY_CODES = new Set([
+  "VERIFIED_PROFILE_STATUS_UNAVAILABLE",
+  "VERIFIED_PROFILE_NOT_READY",
+  "VERIFIED_PROFILE_REPAIR_FAILED",
+]);
+
+const VERIFICATION_NEW_CODE_CODES = new Set([
+  "INVALID_OR_EXPIRED_CODE",
+]);
+
 const stepLabels = [
   "Account and profile",
   "Verify email",
@@ -712,8 +734,13 @@ export function OnboardingFlow({
   );
   const [draft, setDraft] = useState<Draft>(initialDraft);
   const [draftHydrated, setDraftHydrated] = useState(false);
+  const [accountDraftReadyForAutosave, setAccountDraftReadyForAutosave] =
+    useState(false);
+  const [localDraftDirty, setLocalDraftDirty] = useState(false);
   const [catalogFoods, setCatalogFoods] = useState<Food[]>(fallbackFoods);
   const [verificationEmail, setVerificationEmail] = useState("");
+  const [verificationSessionEstablished, setVerificationSessionEstablished] =
+    useState(false);
   const [search, setSearch] = useState("");
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
   const [announcement, setAnnouncement] = useState("");
@@ -723,6 +750,11 @@ export function OnboardingFlow({
   const [pending, setPending] = useState(false);
   const [completionPhase, setCompletionPhase] = useState<
     "saving" | "generating" | null
+  >(null);
+  const [onboardingCompletionSaved, setOnboardingCompletionSaved] =
+    useState(false);
+  const [generationRecoveryKey, setGenerationRecoveryKey] = useState<
+    string | null
   >(null);
   const [exitPending, setExitPending] = useState(false);
   const [pageErrors, setPageErrors] = useState<PageError[]>([]);
@@ -747,8 +779,20 @@ export function OnboardingFlow({
   const draftSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const draftIssueSignatureRef = useRef<string | null>(null);
   const generationKeyRef = useRef<string | null>(null);
+  const safeNavigationStartedRef = useRef(false);
   const registrationEmailRef = useRef<string | null | undefined>(undefined);
   const legacyEmailSanitizedRef = useRef(false);
+  const localDraftChangedRef = useRef(false);
+
+  function markDraftLocallyChanged() {
+    localDraftChangedRef.current = true;
+    setLocalDraftDirty(true);
+    if (onboardingCompletionSaved) {
+      setOnboardingCompletionSaved(false);
+      generationKeyRef.current = null;
+      setGenerationRecoveryKey(null);
+    }
+  }
 
   const reportDraftPersistenceIssue = useCallback(
     (operation: DraftPersistenceIssue["operation"], error: ApiError) => {
@@ -764,11 +808,19 @@ export function OnboardingFlow({
   const markDraftSynced = useCallback(() => {
     const recovered = draftIssueSignatureRef.current !== null;
     draftIssueSignatureRef.current = null;
+    localDraftChangedRef.current = false;
     setDraftPersistenceIssue(null);
     setDraftSyncState("saved");
+    setLocalDraftDirty(false);
     if (recovered) {
       setAnnouncement("Onboarding progress is saved to your account again.");
     }
+  }, []);
+
+  const clearDraftPersistenceIssue = useCallback(() => {
+    draftIssueSignatureRef.current = null;
+    setDraftPersistenceIssue(null);
+    setDraftSyncState("checking");
   }, []);
 
   const loadCatalogFoods = useCallback(async (query = "") => {
@@ -872,6 +924,94 @@ export function OnboardingFlow({
     [markDraftSynced, reportDraftPersistenceIssue],
   );
 
+  const loadAccountDraft = useCallback(
+    async (browserSavedAt: number) => {
+      const fallback = clientApiError(
+        "DRAFT_LOAD_NETWORK_ERROR",
+        "Saved account progress could not be loaded.",
+        "You can continue with the current information on this page. An account-scoped browser copy is used only when browser storage is available.",
+        {
+          retryable: true,
+          action: { kind: "retry", label: "Try account sync" },
+        },
+      );
+      setAccountDraftReadyForAutosave(false);
+      try {
+        const response = await fetch("/api/onboarding");
+        const result =
+          typeof response.json === "function"
+            ? ((await response.json().catch(() => null)) as
+                | {
+                    data?: {
+                      currentStep?: number;
+                      draft?: Partial<Draft>;
+                      updatedAt?: string | null;
+                    };
+                    error?: ApiError | null;
+                  }
+                | null)
+            : null;
+        if (!response.ok) {
+          throw apiErrorFromPayload(result, fallback);
+        }
+        if (!result || !("data" in result)) {
+          throw clientApiError(
+            "DRAFT_LOAD_RESPONSE_INVALID",
+            "The account returned an unreadable saved-progress response.",
+            "You can continue with the current information on this page and try account sync again.",
+            {
+              retryable: true,
+              action: { kind: "retry", label: "Try account sync" },
+            },
+          );
+        }
+        const accountUpdatedAt = result.data?.updatedAt
+          ? Date.parse(result.data.updatedAt)
+          : 0;
+        const accountDraftWins =
+          !localDraftChangedRef.current &&
+          (!browserSavedAt ||
+            (Number.isFinite(accountUpdatedAt) &&
+              accountUpdatedAt >= browserSavedAt));
+        if (result.data?.draft && accountDraftWins) {
+          const restored = normalizeRestoredDraft(result.data.draft);
+          setDraft((current) => ({ ...current, ...restored }));
+        }
+        const accountStep = result.data?.currentStep;
+        if (
+          accountDraftWins &&
+          typeof accountStep === "number" &&
+          Number.isInteger(accountStep) &&
+          accountStep >= 3
+        ) {
+          const restoredStep = Math.min(6, accountStep);
+          setStep((currentStep) => {
+            setStepDirection(
+              restoredStep < currentStep ? "back" : "forward",
+            );
+            return restoredStep;
+          });
+        }
+        if (accountDraftWins) {
+          localDraftChangedRef.current = false;
+          setLocalDraftDirty(false);
+        }
+        clearDraftPersistenceIssue();
+        setAccountDraftReadyForAutosave(true);
+        return true;
+      } catch (error) {
+        reportDraftPersistenceIssue(
+          "load",
+          apiErrorFromPayload({ error }, fallback),
+        );
+        return false;
+      } finally {
+        setDraftHydrated(true);
+      }
+    },
+    [clearDraftPersistenceIssue, reportDraftPersistenceIssue],
+  );
+
   useEffect(() => {
     if (registrationEmailRef.current === undefined) {
       let storedHandoff: string | null = null;
@@ -924,6 +1064,9 @@ export function OnboardingFlow({
     const saved = browserDraftKey ? readStorage(local, browserDraftKey) : null;
     let browserSavedAt = 0;
     setBrowserDraftAvailable(Boolean(local && browserDraftKey));
+    setOnboardingCompletionSaved(false);
+    generationKeyRef.current = null;
+    setGenerationRecoveryKey(null);
     if (saved) {
       try {
         const restored = parseStoredDraft(saved);
@@ -935,80 +1078,23 @@ export function OnboardingFlow({
           );
           setStep(restored.currentStep);
         }
+        setOnboardingCompletionSaved(restored.onboardingCompleted);
+        generationKeyRef.current = restored.generationKey;
+        setGenerationRecoveryKey(restored.generationKey);
       } catch {
         if (browserDraftKey) removeStorage(local, browserDraftKey);
       }
     }
-    const loadAccountDraft = async () => {
-      const fallback = clientApiError(
-        "DRAFT_LOAD_NETWORK_ERROR",
-        "Saved account progress could not be loaded.",
-        "You can continue with the current information on this page. An account-scoped browser copy is used only when browser storage is available.",
-        {
-          retryable: true,
-          action: { kind: "retry", label: "Try account sync" },
-        },
-      );
-      try {
-        const response = await fetch("/api/onboarding");
-        const result =
-          typeof response.json === "function"
-            ? ((await response.json().catch(() => null)) as
-                | {
-                    data?: {
-                      currentStep?: number;
-                      draft?: Partial<Draft>;
-                      updatedAt?: string | null;
-                    };
-                    error?: ApiError | null;
-                  }
-                | null)
-            : null;
-        if (!response.ok) {
-          throw apiErrorFromPayload(result, fallback);
-        }
-        if (!result || !("data" in result)) {
-          throw clientApiError(
-            "DRAFT_LOAD_RESPONSE_INVALID",
-            "The account returned an unreadable saved-progress response.",
-            "You can continue with the current information on this page and try account sync again.",
-            {
-              retryable: true,
-              action: { kind: "retry", label: "Try account sync" },
-            },
-          );
-        }
-        const accountUpdatedAt = result?.data?.updatedAt
-          ? Date.parse(result.data.updatedAt)
-          : 0;
-        const accountDraftWins =
-          !browserSavedAt ||
-          (Number.isFinite(accountUpdatedAt) && accountUpdatedAt >= browserSavedAt);
-        if (result?.data?.draft && accountDraftWins) {
-          const restored = normalizeRestoredDraft(result.data.draft);
-          setDraft((current) => ({ ...current, ...restored }));
-        }
-        const accountStep = result?.data?.currentStep;
-        if (
-          accountDraftWins &&
-          typeof accountStep === "number" &&
-          Number.isInteger(accountStep) &&
-          accountStep >= 3
-        ) {
-          const restoredStep = Math.min(6, accountStep);
-          setStepDirection(restoredStep < safeInitialStep ? "back" : "forward");
-          setStep(restoredStep);
-        }
-      } catch (error) {
-        reportDraftPersistenceIssue(
-          "load",
-          apiErrorFromPayload({ error }, fallback),
-        );
-      } finally {
-        setDraftHydrated(true);
-      }
-    };
-    void loadAccountDraft();
+    if (safeInitialStep === 2 && !browserDraftKey) {
+      // A newly registered account has no authenticated session until its OTP
+      // is verified. That expected state must not look like a draft-load
+      // failure. router.refresh() supplies the user scope after verification
+      // and causes this effect to load the account draft then.
+      setAccountDraftReadyForAutosave(false);
+      setDraftHydrated(true);
+    } else {
+      void loadAccountDraft(browserSavedAt);
+    }
     if (safeInitialStep >= 3) {
       window.setTimeout(() => {
         void loadCatalogFoods();
@@ -1016,10 +1102,12 @@ export function OnboardingFlow({
     }
     }, 0);
     return () => window.clearTimeout(hydrationTimer);
-  }, [browserDraftKey, loadCatalogFoods, reportDraftPersistenceIssue, safeInitialStep]);
+  }, [browserDraftKey, loadAccountDraft, loadCatalogFoods, safeInitialStep]);
 
   useEffect(() => {
+    if (safeNavigationStartedRef.current) return;
     if (!draftHydrated) return;
+    if (!accountDraftReadyForAutosave && !localDraftDirty) return;
     if (!browserDraftKey) {
       const unavailableTimer = window.setTimeout(
         () => setBrowserDraftAvailable(false),
@@ -1035,6 +1123,8 @@ export function OnboardingFlow({
         savedAt: Date.now(),
         currentStep: step,
         draft,
+        onboardingCompleted: onboardingCompletionSaved,
+        generationKey: generationRecoveryKey,
       }),
     );
     const availabilityTimer = window.setTimeout(
@@ -1042,10 +1132,27 @@ export function OnboardingFlow({
       0,
     );
     return () => window.clearTimeout(availabilityTimer);
-  }, [browserDraftKey, draft, draftHydrated, step]);
+  }, [
+    accountDraftReadyForAutosave,
+    browserDraftKey,
+    draft,
+    draftHydrated,
+    localDraftDirty,
+    onboardingCompletionSaved,
+    generationRecoveryKey,
+    step,
+  ]);
 
   useEffect(() => {
-    if (step < 3 || !draftHydrated) return;
+    if (safeNavigationStartedRef.current) return;
+    if (
+      step < 3 ||
+      !draftHydrated ||
+      !accountDraftReadyForAutosave ||
+      onboardingCompletionSaved
+    ) {
+      return;
+    }
     draftSaveTimerRef.current = window.setTimeout(() => {
       draftSaveTimerRef.current = null;
       void queueDraftPersistence(step, draft).catch(() => undefined);
@@ -1056,7 +1163,14 @@ export function OnboardingFlow({
         draftSaveTimerRef.current = null;
       }
     };
-  }, [draft, draftHydrated, queueDraftPersistence, step]);
+  }, [
+    accountDraftReadyForAutosave,
+    draft,
+    draftHydrated,
+    onboardingCompletionSaved,
+    queueDraftPersistence,
+    step,
+  ]);
 
   useEffect(() => {
     if (step !== 2 || resendSeconds <= 0) return;
@@ -1110,6 +1224,7 @@ export function OnboardingFlow({
 
   function goToStep(nextStep: number, focusHeading = true) {
     if (completionPhase !== null) return;
+    markDraftLocallyChanged();
     setPageErrors([]);
     setApiError(null);
     setApiErrorContext(null);
@@ -1127,6 +1242,7 @@ export function OnboardingFlow({
     errors: PageError[],
     heading: string,
   ) {
+    markDraftLocallyChanged();
     setStepDirection(nextStep < step ? "back" : "forward");
     setStep(nextStep);
     showPageErrors(errors, heading);
@@ -1134,6 +1250,7 @@ export function OnboardingFlow({
 
   function update<K extends keyof Draft>(key: K, value: Draft[K]) {
     if (completionPhase !== null) return;
+    markDraftLocallyChanged();
     setPageErrors([]);
     setApiError(null);
     setApiErrorContext(null);
@@ -1248,6 +1365,7 @@ export function OnboardingFlow({
       );
       return;
     }
+    markDraftLocallyChanged();
     setDraft((current) => ({
       ...current,
       meals: {
@@ -1263,6 +1381,7 @@ export function OnboardingFlow({
   }
 
   function setMeal(meal: Meal, ids: string[]) {
+    markDraftLocallyChanged();
     setDraft((current) => ({
       ...current,
       meals: { ...current.meals, [meal]: normalizeMealFoodSlugs(ids) },
@@ -1330,8 +1449,11 @@ export function OnboardingFlow({
     });
   }
 
-  async function verifyOtp() {
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(verificationEmail.trim())) {
+  async function verifyOtp(resumeVerifiedSession = false) {
+    if (
+      !resumeVerifiedSession &&
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(verificationEmail.trim())
+    ) {
       showPageErrors([
         {
           field: "verificationEmail",
@@ -1340,7 +1462,7 @@ export function OnboardingFlow({
       ]);
       return;
     }
-    if (otp.join("").length !== 6) {
+    if (!resumeVerifiedSession && otp.join("").length !== 6) {
       showPageErrors([
         {
           field: "verificationCode",
@@ -1357,10 +1479,14 @@ export function OnboardingFlow({
       const response = await fetch("/api/auth/verify", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          email: verificationEmail.trim(),
-          token: otp.join(""),
-        }),
+        body: JSON.stringify(
+          resumeVerifiedSession
+            ? { resume: true }
+            : {
+                email: verificationEmail.trim(),
+                token: otp.join(""),
+              },
+        ),
       });
       if (!response.ok) {
         const result =
@@ -1372,23 +1498,31 @@ export function OnboardingFlow({
           clientApiError(
             "VERIFICATION_RESPONSE_INVALID",
             "Email verification could not be completed.",
-            "Request a new code and try again. Your registration information is unchanged.",
+            "Try the same verification again. Request a new code only if the current code is reported as invalid or expired.",
             {
               retryable: true,
-              action: { kind: "retry", label: "Request a new code" },
+              action: { kind: "retry", label: "Try verification again" },
             },
           ),
         );
+        const profileRecovery = VERIFIED_PROFILE_RECOVERY_CODES.has(
+          parsed.code,
+        );
+        if (profileRecovery) {
+          setVerificationSessionEstablished(true);
+        }
         showApiError(
           parsed.action
             ? parsed
             : {
                 ...parsed,
-                action: { kind: "retry", label: "Request a new code" },
+                action: { kind: "retry", label: "Try verification again" },
               },
           "We could not verify your email.",
-          "verify",
-          "verificationCode",
+          resumeVerifiedSession ? "resume-verify" : "verify",
+          profileRecovery || resumeVerifiedSession
+            ? undefined
+            : "verificationCode",
         );
         return;
       }
@@ -1407,14 +1541,21 @@ export function OnboardingFlow({
         clientApiError(
           "VERIFICATION_NETWORK_ERROR",
           "The account service could not be reached.",
-          "Check your connection, then request a new code and try again.",
+          resumeVerifiedSession
+            ? "Your verified session is unchanged. Check the connection, then check profile setup again."
+            : "Check your connection, then try the same verification again. Request a new code only if this code is reported as invalid or expired.",
           {
             retryable: true,
-            action: { kind: "retry", label: "Request a new code" },
+            action: {
+              kind: "retry",
+              label: resumeVerifiedSession
+                ? "Check profile setup again"
+                : "Try verification again",
+            },
           },
         ),
         "We could not verify your email.",
-        "verify",
+        resumeVerifiedSession ? "resume-verify" : "verify",
       );
     } finally {
       setPending(false);
@@ -1511,6 +1652,7 @@ export function OnboardingFlow({
 
   function switchUnit(next: Unit) {
     if (next === draft.unit) return;
+    markDraftLocallyChanged();
     setPageErrors([]);
     const convert = (raw: string) => {
       const value = Number(raw);
@@ -1525,7 +1667,33 @@ export function OnboardingFlow({
     }));
   }
 
+  function persistCompletionRecovery(generationKey: string | null) {
+    if (!browserDraftKey) return;
+    const saved = writeStorage(
+      browserStorage("localStorage"),
+      browserDraftKey,
+      JSON.stringify({
+        version: 1,
+        savedAt: 0,
+        currentStep: 6,
+        draft,
+        onboardingCompleted: true,
+        generationKey,
+      }),
+    );
+    setBrowserDraftAvailable(saved);
+  }
+
   async function saveAndExit() {
+    if (onboardingCompletionSaved) {
+      safeNavigationStartedRef.current = true;
+      if (browserDraftKey) {
+        removeStorage(browserStorage("localStorage"), browserDraftKey);
+      }
+      router.push("/today");
+      return;
+    }
+    if (!accountDraftReadyForAutosave) return;
     if (draftSaveTimerRef.current !== null) {
       window.clearTimeout(draftSaveTimerRef.current);
       draftSaveTimerRef.current = null;
@@ -1564,9 +1732,25 @@ export function OnboardingFlow({
     setDraftRetryPending(true);
     setAnnouncement("Retrying account draft sync.");
     try {
-      await queueDraftPersistence(step, draft);
+      if (draftPersistenceIssue?.operation === "load") {
+        let browserSavedAt = 0;
+        if (browserDraftKey) {
+          const local = browserStorage("localStorage");
+          const saved = readStorage(local, browserDraftKey);
+          if (saved) {
+            try {
+              browserSavedAt = parseStoredDraft(saved).savedAt;
+            } catch {
+              removeStorage(local, browserDraftKey);
+            }
+          }
+        }
+        await loadAccountDraft(browserSavedAt);
+      } else {
+        await queueDraftPersistence(step, draft);
+      }
     } catch {
-      // queueDraftPersistence keeps one visible browser-only status and avoids
+      // Persistence helpers keep one visible browser-only status and avoid
       // turning background sync retries into repeated assertive alerts.
     } finally {
       setDraftRetryPending(false);
@@ -1615,98 +1799,106 @@ export function OnboardingFlow({
     setApiError(null);
     setApiErrorContext(null);
     setPending(true);
-    setCompletionPhase("saving");
-    try {
-      if (draftSaveTimerRef.current !== null) {
-        window.clearTimeout(draftSaveTimerRef.current);
-        draftSaveTimerRef.current = null;
-      }
-      await draftSaveQueueRef.current.catch(() => undefined);
-      const response = await fetch("/api/onboarding", {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          ...draft,
-          completed: true,
-        }),
-      });
-      const result =
-        typeof response.json === "function"
-          ? ((await response.json().catch(() => null)) as ApiFailure | null)
-          : null;
-      if (!response.ok) {
-        const failure = completionFailure(result);
-        if (result?.error?.code === "TOO_MANY_RESTRICTIONS") {
-          const allergyCount = draft.allergies
-            .split(",")
-            .map((item) => item.trim())
-            .filter(Boolean).length;
-          failure.field = allergyCount > 50 ? "allergies" : "restrictions";
+    setCompletionPhase(
+      onboardingCompletionSaved && generate ? "generating" : "saving",
+    );
+    if (!onboardingCompletionSaved) {
+      try {
+        if (draftSaveTimerRef.current !== null) {
+          window.clearTimeout(draftSaveTimerRef.current);
+          draftSaveTimerRef.current = null;
         }
-        const parsedError = apiErrorFromPayload(
-          result,
+        await draftSaveQueueRef.current.catch(() => undefined);
+        const response = await fetch("/api/onboarding", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            ...draft,
+            completed: true,
+          }),
+        });
+        const result =
+          typeof response.json === "function"
+            ? ((await response.json().catch(() => null)) as ApiFailure | null)
+            : null;
+        if (!response.ok) {
+          const failure = completionFailure(result);
+          if (result?.error?.code === "TOO_MANY_RESTRICTIONS") {
+            const allergyCount = draft.allergies
+              .split(",")
+              .map((item) => item.trim())
+              .filter(Boolean).length;
+            failure.field = allergyCount > 50 ? "allergies" : "restrictions";
+          }
+          const parsedError = apiErrorFromPayload(
+            result,
+            clientApiError(
+              "ONBOARDING_RESPONSE_INVALID",
+              "The final onboarding step could not be saved.",
+              "Your information remains on this page. Wait briefly and try again.",
+              {
+                retryable: true,
+                action: { kind: "retry", label: "Try again" },
+              },
+            ),
+          );
+          const structuredField = errorCodeFields[parsedError.code];
+          if (
+            structuredField &&
+            parsedError.code !== "TOO_MANY_RESTRICTIONS"
+          ) {
+            failure.field = structuredField;
+          }
+          const contextualDetails = failure.message.startsWith(
+            `${parsedError.message} `,
+          )
+            ? failure.message.slice(parsedError.message.length + 1)
+            : failure.message === parsedError.message
+              ? undefined
+              : failure.message;
+          const failureStep = fieldFocusTargets[failure.field]?.step ?? step;
+          setStepDirection(failureStep < step ? "back" : "forward");
+          setStep(failureStep);
+          showApiError(
+            parsedError.details || !contextualDetails
+              ? parsedError
+              : { ...parsedError, details: contextualDetails },
+            failure.heading,
+            generate ? "complete-generate" : "complete-today",
+            failure.field,
+          );
+          setPending(false);
+          setCompletionPhase(null);
+          return;
+        }
+        setOnboardingCompletionSaved(true);
+        persistCompletionRecovery(null);
+      } catch {
+        showApiError(
           clientApiError(
-            "ONBOARDING_RESPONSE_INVALID",
-            "The final onboarding step could not be saved.",
-            "Your information remains on this page. Wait briefly and try again.",
+            "ONBOARDING_NETWORK_ERROR",
+            "Onboarding services could not be reached.",
+            "The final step was not confirmed. Your information remains on this page.",
             {
               retryable: true,
               action: { kind: "retry", label: "Try again" },
             },
           ),
-        );
-        const structuredField = errorCodeFields[parsedError.code];
-        if (
-          structuredField &&
-          parsedError.code !== "TOO_MANY_RESTRICTIONS"
-        ) {
-          failure.field = structuredField;
-        }
-        const contextualDetails = failure.message.startsWith(
-          `${parsedError.message} `,
-        )
-          ? failure.message.slice(parsedError.message.length + 1)
-          : failure.message === parsedError.message
-            ? undefined
-            : failure.message;
-        const failureStep = fieldFocusTargets[failure.field]?.step ?? step;
-        setStepDirection(failureStep < step ? "back" : "forward");
-        setStep(failureStep);
-        showApiError(
-          parsedError.details || !contextualDetails
-            ? parsedError
-            : { ...parsedError, details: contextualDetails },
-          failure.heading,
+          "We could not complete onboarding.",
           generate ? "complete-generate" : "complete-today",
-          failure.field,
         );
         setPending(false);
         setCompletionPhase(null);
         return;
       }
+    }
+
+    if (!generate) {
+      safeNavigationStartedRef.current = true;
       if (browserDraftKey) {
         removeStorage(browserStorage("localStorage"), browserDraftKey);
       }
-      if (!generate) {
-        router.push("/today");
-        return;
-      }
-    } catch {
-      showApiError(
-        clientApiError(
-          "ONBOARDING_NETWORK_ERROR",
-          "Onboarding services could not be reached.",
-          "The final step was not confirmed. Your information remains on this page.",
-          {
-            retryable: true,
-            action: { kind: "retry", label: "Try again" },
-          },
-        ),
-        "We could not complete onboarding.",
-        generate ? "complete-generate" : "complete-today",
-      );
-      setPending(false);
-      setCompletionPhase(null);
+      router.push("/today");
       return;
     }
 
@@ -1715,6 +1907,8 @@ export function OnboardingFlow({
       const idempotencyKey =
         generationKeyRef.current ?? crypto.randomUUID();
       generationKeyRef.current = idempotencyKey;
+      setGenerationRecoveryKey(idempotencyKey);
+      persistCompletionRecovery(idempotencyKey);
       const generationResponse = await fetch("/api/plans/generate", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1728,6 +1922,8 @@ export function OnboardingFlow({
           : null;
       if (!generationResponse.ok) {
         generationKeyRef.current = null;
+        setGenerationRecoveryKey(null);
+        persistCompletionRecovery(null);
         showApiError(
           apiErrorFromPayload(
             generationResult,
@@ -1766,6 +1962,8 @@ export function OnboardingFlow({
       const planId = generationResult?.data?.planId;
       if (typeof planId !== "string" || !planId.trim()) {
         generationKeyRef.current = null;
+        setGenerationRecoveryKey(null);
+        persistCompletionRecovery(null);
         showApiError(
           clientApiError(
             "PLAN_RESULT_MISSING",
@@ -1782,6 +1980,10 @@ export function OnboardingFlow({
         return;
       }
       generationKeyRef.current = null;
+      safeNavigationStartedRef.current = true;
+      if (browserDraftKey) {
+        removeStorage(browserStorage("localStorage"), browserDraftKey);
+      }
       router.push("/plan");
     } catch {
       showApiError(
@@ -1829,8 +2031,10 @@ export function OnboardingFlow({
     }
 
     if (apiErrorContext === "verify") {
+      if (VERIFIED_PROFILE_RECOVERY_CODES.has(code)) return null;
       return fieldFocusTargets.verificationCode;
     }
+    if (apiErrorContext === "resume-verify") return null;
     if (apiErrorContext === "resend") {
       return fieldFocusTargets.verificationEmail;
     }
@@ -1867,6 +2071,17 @@ export function OnboardingFlow({
     }
     switch (apiErrorContext) {
       case "verify":
+        if (VERIFIED_PROFILE_RECOVERY_CODES.has(apiError?.code ?? "")) {
+          void verifyOtp(true);
+        } else if (VERIFICATION_NEW_CODE_CODES.has(apiError?.code ?? "")) {
+          void resendOtp();
+        } else {
+          void verifyOtp();
+        }
+        break;
+      case "resume-verify":
+        void verifyOtp(true);
+        break;
       case "resend":
         void resendOtp();
         break;
@@ -1904,6 +2119,10 @@ export function OnboardingFlow({
   const apiActionCanRun =
     apiError?.action?.kind === "retry" ||
     apiActionIsLocal;
+  const apiActionNeedsResendCooldown =
+    apiErrorContext === "resend" ||
+    (apiErrorContext === "verify" &&
+      VERIFICATION_NEW_CODE_CODES.has(apiError?.code ?? ""));
   const topLevelContentClass = `onboarding-content${
     step === 3 ? " onboarding-content-food" : ""
   }`;
@@ -1946,7 +2165,7 @@ export function OnboardingFlow({
         <div className="onboarding-header">
           <span className="mobile-progress">Step {step} of 6 · {stepLabels[step - 1]}</span>
           <span className="date-label">{progressSaveLabel}</span>
-          {step > 2 ? <button className="text-link" disabled={exitPending || pending} type="button" onClick={saveAndExit}>{exitPending ? "Saving draft…" : "Save and exit"}</button> : <span />}
+          {step > 2 ? <button className="text-link" disabled={exitPending || pending || (!accountDraftReadyForAutosave && !onboardingCompletionSaved)} type="button" onClick={saveAndExit}>{exitPending ? "Saving draft…" : "Save and exit"}</button> : <span />}
         </div>
         <p className="sr-only" role="status" aria-live="polite">{announcement}</p>
         {apiError || pageErrors.length > 0 || draftPersistenceIssue ? (
@@ -1957,8 +2176,7 @@ export function OnboardingFlow({
                   pending ||
                   exitPending ||
                   resendPending ||
-                  ((apiErrorContext === "verify" || apiErrorContext === "resend") &&
-                    resendSeconds > 0)
+                  (apiActionNeedsResendCooldown && resendSeconds > 0)
                 }
                 error={displayedApiError}
                 heading={errorHeading}
@@ -2121,9 +2339,20 @@ export function OnboardingFlow({
                       : "Resend code"}
                 </button>
               </div>
+              <p className="field-help" style={{ marginTop: ".75rem" }}>
+                Email already verified in this browser?{" "}
+                <button
+                  className="text-link"
+                  disabled={pending}
+                  onClick={() => void verifyOtp(true)}
+                  type="button"
+                >
+                  Continue account setup
+                </button>
+              </p>
               <div className="onboarding-actions">
-                <button className="button button-quiet" type="button" onClick={() => router.push("/register")}><ArrowLeft size={17} /> Back</button>
-                <div><button className="button button-dark" disabled={pending} type="button" onClick={verifyOtp}>{pending ? "Verifying…" : "Verify and continue"} <ArrowRight size={17} /></button></div>
+                <button className="button button-quiet" type="button" onClick={() => router.push(verificationSessionEstablished ? "/login" : "/register")}><ArrowLeft size={17} /> {verificationSessionEstablished ? "Use another account" : "Back"}</button>
+                <div><button className="button button-dark" disabled={pending} type="button" onClick={() => void verifyOtp()}>{pending ? "Verifying…" : "Verify and continue"} <ArrowRight size={17} /></button></div>
               </div>
             </>
           ) : null}

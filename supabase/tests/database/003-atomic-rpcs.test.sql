@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(62);
+select plan(69);
 
 create or replace function pg_temp.valid_plan_output(
   item_food_id uuid default '10000000-0000-4000-8000-000000000002',
@@ -90,12 +90,77 @@ as $$
   );
 $$;
 
+create or replace function pg_temp.replay_test_onboarding(
+  height_value numeric default 175,
+  current_weight_value numeric default 82,
+  goal_type_value public.goal_type default 'fat_loss',
+  start_date_value date default (now() at time zone 'UTC')::date,
+  preference_payload jsonb default null
+)
+returns uuid
+language sql
+volatile
+set search_path = ''
+as $$
+  select public.complete_onboarding_from_slugs(
+    height_value,
+    'kg',
+    'UTC',
+    'moderately_active',
+    3::smallint,
+    array[]::text[],
+    array[]::text[],
+    array[]::text[],
+    null,
+    'Test onboarding',
+    goal_type_value,
+    current_weight_value,
+    75::numeric,
+    start_date_value,
+    (now() at time zone 'UTC')::date + 84,
+    coalesce(
+      preference_payload,
+      jsonb_build_array(
+        jsonb_build_object(
+          'mealType', 'breakfast',
+          'foodSlug', 'white-rice',
+          'sortOrder', 0
+        ),
+        jsonb_build_object(
+          'mealType', 'lunch',
+          'foodSlug', 'chicken-breast',
+          'sortOrder', 0
+        ),
+        jsonb_build_object(
+          'mealType', 'dinner',
+          'foodSlug', 'tofu',
+          'sortOrder', 0
+        )
+      )
+    ),
+    jsonb_build_array(
+      jsonb_build_object(
+        'warningCode', 'missing_vegetable',
+        'mealType', 'lunch',
+        'contextVersion', 'onboarding-v1'
+      )
+    )
+  );
+$$;
+
 create temporary table rpc_results (
   goal_id uuid not null,
   plan_id uuid
 ) on commit drop;
 grant all on table rpc_results to authenticated;
 grant all on table rpc_results to service_role;
+
+create temporary table onboarding_replay_snapshot (
+  profile_updated_at timestamptz not null,
+  goal_updated_at timestamptz not null,
+  baseline_updated_at timestamptz not null
+) on commit drop;
+grant all on table onboarding_replay_snapshot to authenticated;
 
 insert into auth.users (
   instance_id,
@@ -223,6 +288,25 @@ select lives_ok(
   $$,
   'slug-resolving onboarding persists all validated sections atomically'
 );
+
+insert into onboarding_replay_snapshot (
+  profile_updated_at,
+  goal_updated_at,
+  baseline_updated_at
+)
+select
+  profile.updated_at,
+  goal.updated_at,
+  baseline.updated_at
+from public.profiles profile
+join public.goals goal
+  on goal.user_id = profile.user_id
+  and goal.status = 'active'
+join public.weight_entries baseline
+  on baseline.user_id = profile.user_id
+  and baseline.is_onboarding_baseline
+where profile.user_id = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+
 select lives_ok(
   $$
     select pg_temp.complete_test_onboarding(
@@ -246,6 +330,100 @@ select lives_ok(
     )
   $$,
   'replaying the same onboarding completion is idempotent'
+);
+select is(
+  (
+    select jsonb_build_array(
+      profile.updated_at,
+      goal.updated_at,
+      baseline.updated_at
+    )
+    from public.profiles profile
+    join public.goals goal
+      on goal.user_id = profile.user_id
+      and goal.status = 'active'
+    join public.weight_entries baseline
+      on baseline.user_id = profile.user_id
+      and baseline.is_onboarding_baseline
+    where profile.user_id = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+  ),
+  (
+    select jsonb_build_array(
+      profile_updated_at,
+      goal_updated_at,
+      baseline_updated_at
+    )
+    from onboarding_replay_snapshot
+  ),
+  'an exact completion replay does not rewrite profile, goal, or baseline timestamps'
+);
+select throws_ok(
+  $$ select pg_temp.replay_test_onboarding(current_weight_value => 83) $$,
+  '23514',
+  'Onboarding is already completed and cannot be changed through setup.',
+  'a completed onboarding replay cannot replace the starting weight'
+);
+select throws_ok(
+  $$ select pg_temp.replay_test_onboarding(height_value => 176) $$,
+  '23514',
+  'Onboarding is already completed and cannot be changed through setup.',
+  'a completed onboarding replay cannot replace profile fields'
+);
+select throws_ok(
+  $$
+    select pg_temp.replay_test_onboarding(
+      goal_type_value => 'muscle_gain'
+    )
+  $$,
+  '23514',
+  'Onboarding is already completed and cannot be changed through setup.',
+  'a completed onboarding replay cannot replace the active goal'
+);
+select throws_ok(
+  $$
+    select pg_temp.replay_test_onboarding(
+      start_date_value => (now() at time zone 'UTC')::date - 1
+    )
+  $$,
+  '23514',
+  'Onboarding is already completed and cannot be changed through setup.',
+  'a completed onboarding replay cannot move the baseline date'
+);
+select throws_ok(
+  $$
+    select pg_temp.replay_test_onboarding(
+      preference_payload => jsonb_build_array(
+        jsonb_build_object(
+          'mealType', 'breakfast',
+          'foodSlug', 'rolled-oats',
+          'sortOrder', 0
+        ),
+        jsonb_build_object(
+          'mealType', 'lunch',
+          'foodSlug', 'chicken-breast',
+          'sortOrder', 0
+        ),
+        jsonb_build_object(
+          'mealType', 'dinner',
+          'foodSlug', 'tofu',
+          'sortOrder', 0
+        )
+      )
+    )
+  $$,
+  '23514',
+  'Onboarding is already completed and cannot be changed through setup.',
+  'a completed onboarding replay cannot replace meal preferences'
+);
+select is(
+  (
+    select weight_kg
+    from public.weight_entries
+    where user_id = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+      and is_onboarding_baseline
+  ),
+  82::numeric,
+  'rejected completion changes preserve the original baseline value'
 );
 select is(
   (
@@ -1289,14 +1467,14 @@ set local role service_role;
 select is(
   (
     select allowed
-    from public.reserve_food_label_upload(
+    from public.preflight_food_label_upload(
       'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
       'c7000000-0000-4000-8000-000000000001',
       'nutrition'
     )
   ),
   true,
-  'the trusted server can reserve an editable label-image upload'
+  'the trusted server can preflight an editable label-image upload'
 );
 
 reset role;

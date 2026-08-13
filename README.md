@@ -8,8 +8,8 @@ The repository is a single full-stack TypeScript application built with Next.js 
 
 > **Wellness and safety:** Let's Go Green! provides general wellness information and is not medical advice. Individual needs can vary. Consult a qualified healthcare professional or registered dietitian when appropriate.
 
-The current testing build is **Let's Go Green! 1.0 Beta 3**
-(`1.0.0-beta.3`). See [VERSIONING.md](VERSIONING.md) for the release-number
+The current testing build is **Let's Go Green! 1.0 Beta 4**
+(`1.0.0-beta.4`). See [VERSIONING.md](VERSIONING.md) for the release-number
 policy and [CHANGELOG.md](CHANGELOG.md) for user-visible changes.
 
 ## Current feature set
@@ -35,6 +35,9 @@ The repository is structured to provide:
   for a user-confirmed personal product; a separate opt-in can create one
   reusable normalized pending-review record without sharing the photo or
   account identity.
+- Crash-recoverable private label-photo replacement with one-use preflight
+  tokens, compare-and-swap finalization, and a private cleanup queue that
+  rechecks references before object deletion.
 - Versioned seven-day plans with an accepted-plan boundary.
 - Six ordered daily spaces—breakfast, morning snack, lunch, afternoon snack, dinner, and evening snack—with extra-food recording and an explicit skipped state whose reason is optional.
 - A profile reached from the account avatar, automatic device-time-zone initialization without a location permission prompt, a replayable first-run tutorial, and clearly external nearby-shopping links.
@@ -43,9 +46,11 @@ The repository is structured to provide:
   preferences.
 - System, Light, and Dark appearance modes; System follows live device/macOS
   appearance, while an explicit override is stored locally.
-- Safe structured registration and onboarding errors with a concrete reason,
-  stable reference code, recovery action, and retry guidance.
-- Local-date weight entries, progress summaries, and rolling trends.
+- Safe structured registration, onboarding, food, check-in, weight, plan, and
+  settings errors with a concrete reason, stable reference code, recovery
+  action, and retry guidance at critical persistence boundaries.
+- Local-date weight entries, progress summaries, and rolling trends, with the
+  onboarding baseline protected from later edit or deletion.
 - Deterministic unit, date, progress, completion, nutrition, filtering, and safety calculations.
 - Local Supabase Auth, PostgreSQL, Row Level Security, migrations, deterministic seed data, Studio, and captured email.
 - Mock-backed plan generation for credential-free development and CI.
@@ -98,7 +103,19 @@ Deterministic code—not a language model—owns unit conversion, timeline math,
 | Uploaded package label | A server-re-encoded, owner-private JPEG/PNG plus the account owner's exact transcription | The original upload is not retained as-is; confirmation requires sanitized nutrition-label evidence and creates an active `user_label` personal product for that owner, not an independently reviewed record |
 | Opt-in reusable label facts | One normalized catalog identity derived from exact product text and confirmed core nutrition | Created only after a separate sharing confirmation; reusable as `pending_review`, while the private photo, account identity, and owner-private product are never published to other accounts |
 
+Private photo replacement uses a unique reservation and database
+compare-and-swap before a new object becomes current. Interrupted, concurrent,
+or superseded uploads enter a private trusted-server cleanup queue; deletion
+rechecks that no current image metadata references the object. Historical
+referenced evidence is never removed merely because a migration runs.
+
 Nutrition cards preserve the stated basis—such as raw, dry, cooked, as sold, per 100 g, or one label serving—and show only values actually present in the stored source. Calories, energy in kilojoules, protein, carbohydrate, fat, fiber, sodium, saturated and trans fat, sugars, cholesterol, potassium, calcium, iron, vitamin D, and additional provider-reported nutrients can be displayed when available. A missing nutrient remains missing; it is never filled by a guess.
+
+Online previews distinguish nutrition reported per 100 g from nutrition reported
+per 100 mL. The current plan engine imports only the mass-based form; a liquid
+Open Food Facts candidate is identified in search but rejected before any write
+instead of being mislabeled as grams. Its package-label path remains available
+when the label supplies a serving weight in grams.
 
 The deterministic broccoli, spinach, romaine lettuce, carrot, and tomato records
 include the conventional nutrition summary plus 19 additional nutrients from
@@ -213,7 +230,7 @@ Exact-product lookup runs on the server. Add these values to the ignored `.env.l
 USDA_FDC_API_KEY=
 
 # Descriptive application identity sent to food-data providers.
-FOOD_LOOKUP_USER_AGENT=LetsGoGreen/1.0.0-beta.3 (https://github.com/thereallinkai/Lets-Go-Green)
+FOOD_LOOKUP_USER_AGENT=LetsGoGreen/1.0.0-beta.4 (https://github.com/thereallinkai/Lets-Go-Green)
 ```
 
 - `USDA_FDC_API_KEY` is optional for local development because non-production mode can use the USDA `DEMO_KEY`. That shared key is rate-limited and is not a production configuration. Obtain and secure a data.gov key before relying on USDA lookup in a deployed environment.
@@ -273,9 +290,10 @@ The endpoint does not expose keys, connection strings, internal tokens, raw prov
 | `npm run test:e2e` | Run mock-backed Playwright end-to-end and accessibility tests. |
 | `npm run typecheck` | Check TypeScript without emitting files. |
 | `npm run lint` | Run ESLint. |
+| `npm run audit:security` | Fail when the installed dependency graph has a high- or critical-severity published advisory. |
 | `npm run build` | Create the production Next.js build. |
-| `npm run verify:app` | Run typecheck, lint, Vitest, production build, and mock-backed Playwright without the database/RLS gate. |
-| `npm run verify` | Run the full typecheck, lint, Vitest, database/RLS, generated-type drift, production-build, Playwright, and accessibility gate. |
+| `npm run verify:app` | Run the security audit, typecheck, lint, Vitest, production build, and mock-backed Playwright without the database/RLS gate. |
+| `npm run verify` | Run the full security-audit, typecheck, lint, Vitest, database/RLS, generated-type drift, production-build, Playwright, and accessibility gate. |
 | `npm run db:types` | Regenerate `src/types/database.ts` from the running local database. |
 | `npm run db:types:check` | Fail when generated types differ from the local migration state. |
 | `npm run db:reset` | **Destructively** reconstruct only the local database after an explicit confirmation. |
@@ -355,7 +373,9 @@ Current automated coverage includes:
 - Real local database coverage of schema and seed invariants, immutable DOB and
   legacy-account boundaries, constraints, catalog and pending-record visibility,
   private ownership, cross-user RLS denial, snack and skipped-meal persistence,
-  and atomic application RPCs.
+  protected onboarding baselines, completed-onboarding replay, external-source
+  category replacement, crash-recoverable label reservations, and atomic
+  application RPCs.
 - Playwright coverage of public and legal navigation, registration age
   confirmation, protected mock pages, Today persistence, mock-plan generation
   and acceptance, motion/reduced-motion behavior, mobile primary navigation,
@@ -386,7 +406,12 @@ The default branch is protected by the owner-only setup documented in
 resolved review conversations, and the exact **Local mock-backed suite** check;
 it also blocks deletion and force-pushes.
 
-CI runs for every pull request and push to `main`. It uses Node 22, `npm ci`, fresh local Supabase, migrations, deterministic seed data, captured email, mock AI, generated-type drift detection, type checking, lint, Vitest, database/RLS tests, a production build, and Playwright. Cleanup stops Supabase even after failure. Superseded branch runs are cancelled.
+CI runs for every pull request and push to `main`. It uses Node 22, `npm ci`, a high-severity dependency audit, fresh local Supabase, migrations, deterministic seed data, captured email, mock AI, generated-type drift detection, type checking, lint, Vitest, database/RLS tests, a production build, and Playwright. Cleanup stops Supabase even after failure. Superseded branch runs are cancelled.
+
+Dependabot groups routine minor and patch updates while leaving major upgrades
+for individual review. TypeScript and Node type-definition major versions stay
+aligned with the supported compiler and pinned Node 22 runtime instead of being
+combined into an uninstallable update batch.
 
 CI has only `contents: read`, uses no production secrets, and does not use `pull_request_target`; forked pull requests can run the same local mock suite safely. Failed Playwright diagnostics are retained briefly and should contain only test data.
 

@@ -16,6 +16,7 @@ import {
   type NutritionVerificationStatus,
 } from "@/src/lib/domain";
 import { isDevelopmentDemo } from "@/src/lib/env";
+import { readPlanSnapshotWeight } from "@/src/lib/plan-snapshot";
 import { createSupabaseServerClient } from "@/src/lib/supabase/server";
 import type { Json, Tables } from "@/src/types/database";
 
@@ -377,7 +378,14 @@ export default async function PlanPage({
   const parsedPlan = aiPlanSchema.safeParse(
     selectedPlan.validated_output_snapshot,
   );
-  const startWeight = weightsResult.data?.weight_kg ?? null;
+  const startWeight =
+    readPlanSnapshotWeight(selectedPlan.input_snapshot, "startWeightKg") ??
+    weightsResult.data?.weight_kg ??
+    null;
+  const targetWeight =
+    readPlanSnapshotWeight(selectedPlan.input_snapshot, "targetWeightKg") ??
+    goalResult.data?.target_weight_kg ??
+    null;
   const history: PlanHistoryDisplay[] = availablePlans.map((plan: PlanRow) => ({
     id: plan.id,
     version: plan.version,
@@ -437,7 +445,7 @@ export default async function PlanPage({
       safetyNotes={parsedPlan.success ? parsedPlan.data.safetyNotes : []}
       serverBacked
       startWeightKg={startWeight}
-      targetWeightKg={goalResult.data?.target_weight_kg ?? null}
+      targetWeightKg={targetWeight}
       version={selectedPlan.version}
       weeklyReviewRules={
         parsedPlan.success ? parsedPlan.data.weeklyReviewRules : []

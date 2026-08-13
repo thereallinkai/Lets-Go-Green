@@ -5,6 +5,7 @@ import {
   parseLocalDate,
 } from "@/src/lib/domain";
 import { apiError, apiSuccess } from "@/src/lib/api-response";
+import { isAuthSessionMissing } from "@/src/lib/auth-error-taxonomy";
 import { isDevelopmentDemo } from "@/src/lib/env";
 import { createSupabaseServerClient } from "@/src/lib/supabase/server";
 
@@ -64,16 +65,51 @@ export async function POST(
 
   try {
     const supabase = await createSupabaseServerClient();
-    const { data: auth } = await supabase.auth.getUser();
-    if (!auth.user) {
+    const { data: auth, error: authError } = await supabase.auth.getUser();
+    if (authError && !isAuthSessionMissing(authError)) {
+      return apiError(
+        "CHECKIN_AUTH_UNAVAILABLE",
+        "Your session could not be checked before adding the food.",
+        503,
+        {
+          details: "No food record was changed. Check the connection and try again.",
+          retryable: true,
+          action: { kind: "retry", label: "Try adding again" },
+        },
+      );
+    }
+    if (!auth.user || isAuthSessionMissing(authError)) {
       return apiError("SESSION_EXPIRED", "Log in to add a food.", 401);
     }
-    const { data: profile } = await supabase
+    const { data: profile, error: profileError } = await supabase
       .from("profiles")
       .select("time_zone")
       .eq("user_id", auth.user.id)
       .maybeSingle();
-    const timeZone = profile?.time_zone ?? "UTC";
+    if (profileError) {
+      return apiError(
+        "CHECKIN_PROFILE_UNAVAILABLE",
+        "Your time zone could not be checked before adding the food.",
+        503,
+        {
+          details: "No food record was changed. Check the connection and try again.",
+          retryable: true,
+          action: { kind: "retry", label: "Try adding again" },
+        },
+      );
+    }
+    if (!profile?.time_zone) {
+      return apiError(
+        "PROFILE_REQUIRED",
+        "Complete profile setup before recording foods.",
+        409,
+        {
+          details: "A verified profile and time zone are required for local-date records.",
+          action: { kind: "navigate", label: "Finish profile setup", href: "/onboarding" },
+        },
+      );
+    }
+    const timeZone = profile.time_zone;
     if (date > localDateInTimeZone(new Date(), timeZone)) {
       return apiError(
         "FUTURE_CHECKIN_DISABLED",

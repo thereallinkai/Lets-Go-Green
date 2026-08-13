@@ -12,6 +12,13 @@ import {
   RotateCcw,
   Sparkles,
 } from "lucide-react";
+import { ApiErrorNotice } from "@/components/api-error-notice";
+import type { ApiError } from "@/src/lib/api-response";
+import {
+  apiErrorFromResponse,
+  apiErrorFromThrown,
+  clientApiError,
+} from "@/src/lib/client-api-error";
 
 export type PlanFoodDisplay = [
   name: string,
@@ -154,6 +161,7 @@ export function PlanView({
   );
   const [accepting, setAccepting] = useState(false);
   const [announcement, setAnnouncement] = useState("");
+  const [operationError, setOperationError] = useState<ApiError | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const activeDayIndex = days.length ? Math.min(day, days.length - 1) : 0;
   const activeDay = days[activeDayIndex] ?? { label: "Day 1", meals: [] };
@@ -163,6 +171,13 @@ export function PlanView({
     : undefined;
 
   async function generate() {
+    const fallback = clientApiError(
+      "PLAN_GENERATION_UNAVAILABLE",
+      "Plan generation could not finish.",
+      "Your accepted plan is unchanged. Check the connection and try again.",
+      { retryable: true, action: { kind: "retry", label: "Try generating again" } },
+    );
+    setOperationError(null);
     setStatus("generating");
     setAnnouncement("Plan generation started. You may navigate away safely.");
     try {
@@ -171,13 +186,20 @@ export function PlanView({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ idempotencyKey: crypto.randomUUID() }),
       });
-      if (!response.ok) throw new Error("generation_failed");
+      if (!response.ok) {
+        throw await apiErrorFromResponse(response, fallback);
+      }
       const result = (await response.json()) as {
         data?: { planId?: string | null };
       };
       const planId = result.data?.planId;
       if (typeof planId !== "string" || !planId.trim()) {
-        throw new Error("generation_missing_plan");
+        throw clientApiError(
+          "PLAN_RESPONSE_INVALID",
+          "The generated plan response was incomplete.",
+          "Your accepted plan is unchanged. Try generating a new draft again.",
+          { retryable: true, action: { kind: "retry", label: "Try generating again" } },
+        );
       }
       if (serverBacked) {
         setAnnouncement("A new draft is ready. Loading it for review.");
@@ -190,8 +212,10 @@ export function PlanView({
       setAnnouncement(
         "A new draft is ready. Your accepted plan has not changed.",
       );
-    } catch {
+    } catch (error) {
+      const publicError = apiErrorFromThrown(error, fallback);
       setStatus(initialStatus);
+      setOperationError(publicError);
       setAnnouncement(
         "Plan generation could not finish. Your accepted plan is unchanged.",
       );
@@ -200,13 +224,22 @@ export function PlanView({
 
   async function acceptDraft() {
     if (!reviewPlanId || accepting) return;
+    const fallback = clientApiError(
+      "PLAN_ACCEPT_UNAVAILABLE",
+      "This version could not be accepted.",
+      "Your current accepted plan is unchanged. Check the connection and try again.",
+      { retryable: true, action: { kind: "retry", label: "Try accepting again" } },
+    );
+    setOperationError(null);
     setAccepting(true);
     try {
       const response = await fetch(
         `/api/plans/${encodeURIComponent(reviewPlanId)}/accept`,
         { method: "POST" },
       );
-      if (!response.ok) throw new Error("accept_failed");
+      if (!response.ok) {
+        throw await apiErrorFromResponse(response, fallback);
+      }
       const acceptedHistoricalVersion = status === "historical";
       setStatus("accepted");
       setReviewPlanId(null);
@@ -219,7 +252,9 @@ export function PlanView({
         router.replace("/plan?view=accepted");
         router.refresh();
       }
-    } catch {
+    } catch (error) {
+      const publicError = apiErrorFromThrown(error, fallback);
+      setOperationError(publicError);
       setAnnouncement(
         "This version could not be accepted. Your current accepted plan is unchanged.",
       );
@@ -296,6 +331,13 @@ export function PlanView({
           </button>
         </div>
       </header>
+
+      {operationError ? (
+        <ApiErrorNotice
+          error={operationError}
+          heading="We could not complete that plan action"
+        />
+      ) : null}
 
       {showHistory ? (
         <section id="plan-version-history" className="card" aria-label="Plan version history" style={{ marginBottom: "1rem" }}>

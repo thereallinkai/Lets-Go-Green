@@ -36,6 +36,14 @@ const TIMEOUT_CODES = new Set([
   "hook_timeout_after_retry",
 ]);
 
+const SESSION_MISSING_CODES = new Set([
+  "session_not_found",
+  "session_expired",
+  "refresh_token_not_found",
+  "refresh_token_already_used",
+  "bad_jwt",
+]);
+
 function value(error: unknown, key: keyof AuthErrorLike) {
   if (!error || typeof error !== "object") return undefined;
   return (error as AuthErrorLike)[key];
@@ -49,6 +57,11 @@ function errorCode(error: unknown) {
 function errorStatus(error: unknown) {
   const status = value(error, "status");
   return typeof status === "number" ? status : undefined;
+}
+
+export function isAuthSessionMissing(error: unknown) {
+  return value(error, "name") === "AuthSessionMissingError"
+    || SESSION_MISSING_CODES.has(errorCode(error));
 }
 
 function weakPasswordReasons(error: unknown) {
@@ -263,7 +276,7 @@ export function classifyAuthError(
     return retryableServiceError(
       "VERIFICATION_UNAVAILABLE",
       "Email verification could not be completed.",
-      "Request a new code and try again. Your registration information is unchanged.",
+      "Try the same verification again. Request a new code only if the current code is reported as invalid or expired.",
     );
   }
 
@@ -281,6 +294,28 @@ export function classifyAuthError(
       "Password recovery email could not be sent right now.",
       "Wait briefly, check the connection, and submit one new recovery request.",
     );
+  }
+
+  if (
+    operation === "update_password"
+    && (
+      isAuthSessionMissing(error)
+      || code === "reauthentication_needed"
+      || code === "reauthentication_not_valid"
+    )
+  ) {
+    return {
+      code: "SESSION_EXPIRED",
+      message: "Open a fresh password-reset link and try again.",
+      details: "For security, an expired reset session cannot be reused.",
+      status: 401,
+      retryable: false,
+      action: {
+        kind: "navigate",
+        label: "Request another reset link",
+        href: "/forgot-password",
+      },
+    };
   }
 
   if (code === "weak_password") {
@@ -304,28 +339,6 @@ export function classifyAuthError(
       status: 409,
       retryable: false,
       action: { kind: "edit", label: "Choose another password" },
-    };
-  }
-  if (
-    code === "session_not_found" ||
-    code === "session_expired" ||
-    code === "refresh_token_not_found" ||
-    code === "refresh_token_already_used" ||
-    code === "bad_jwt" ||
-    code === "reauthentication_needed" ||
-    code === "reauthentication_not_valid"
-  ) {
-    return {
-      code: "SESSION_EXPIRED",
-      message: "Open a fresh password-reset link and try again.",
-      details: "For security, an expired reset session cannot be reused.",
-      status: 401,
-      retryable: false,
-      action: {
-        kind: "navigate",
-        label: "Request another reset link",
-        href: "/forgot-password",
-      },
     };
   }
   return {

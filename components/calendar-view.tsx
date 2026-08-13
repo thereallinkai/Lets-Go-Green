@@ -8,6 +8,13 @@ import {
   Circle,
   Undo2,
 } from "lucide-react";
+import { ApiErrorNotice } from "@/components/api-error-notice";
+import type { ApiError } from "@/src/lib/api-response";
+import {
+  apiErrorFromResponse,
+  apiErrorFromThrown,
+  clientApiError,
+} from "@/src/lib/client-api-error";
 import {
   MEAL_SLOT_LABELS,
   MEAL_SLOTS,
@@ -134,6 +141,7 @@ export function CalendarView({
     emptyCheckin(selectedDate);
   const [notes, setNotes] = useState(selectedCheckin.notes ?? "");
   const [announcement, setAnnouncement] = useState("");
+  const [operationError, setOperationError] = useState<ApiError | null>(null);
   const [saving, setSaving] = useState(false);
   const [lastChange, setLastChange] = useState<LastChange | null>(null);
   const [skipEditor, setSkipEditor] = useState<MealSlot | null>(null);
@@ -182,13 +190,22 @@ export function CalendarView({
   }, [checkins, month]);
 
   async function loadMonth(nextMonth: string, selectDate?: string) {
+    const fallback = clientApiError(
+      "CHECKINS_LOAD_UNAVAILABLE",
+      "The requested month could not be loaded.",
+      "The current month remains visible. Check the connection and try again.",
+      { retryable: true, action: { kind: "retry", label: "Try loading again" } },
+    );
+    setOperationError(null);
     const { first, last } = monthBounds(nextMonth);
     setAnnouncement(`Loading ${monthLabel(nextMonth)}…`);
     try {
       const response = await fetch(
         `/api/checkins?from=${encodeURIComponent(first)}&to=${encodeURIComponent(last)}`,
       );
-      if (!response.ok) throw new Error("load_failed");
+      if (!response.ok) {
+        throw await apiErrorFromResponse(response, fallback);
+      }
       const result = (await response.json()) as {
         data: CalendarCheckin[] | null;
       };
@@ -203,10 +220,10 @@ export function CalendarView({
       setNotes(nextCheckin?.notes ?? "");
       setLastChange(null);
       setAnnouncement(`${monthLabel(nextMonth)} is ready.`);
-    } catch {
-      setAnnouncement(
-        "The requested month could not be loaded. The current month remains visible.",
-      );
+    } catch (error) {
+      const publicError = apiErrorFromThrown(error, fallback);
+      setOperationError(publicError);
+      setAnnouncement(`${publicError.message} Error code: ${publicError.code}.`);
     }
   }
 
@@ -223,6 +240,12 @@ export function CalendarView({
     status: MealCheckinStatus,
     reason: string | null,
   ) {
+    const fallback = clientApiError(
+      "CHECKIN_SAVE_UNAVAILABLE",
+      "The meal status could not be saved.",
+      "The previous status remains. Check the connection and try again.",
+      { retryable: true, action: { kind: "retry", label: "Try again" } },
+    );
     const response = await fetch(`/api/checkins/${selectedDate}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
@@ -233,7 +256,9 @@ export function CalendarView({
         skipReason: status === "skipped" ? reason : null,
       }),
     });
-    if (!response.ok) throw new Error("save_failed");
+    if (!response.ok) {
+      throw await apiErrorFromResponse(response, fallback);
+    }
   }
 
   async function setMeal(
@@ -257,6 +282,7 @@ export function CalendarView({
       ),
     }));
     setSaving(true);
+    setOperationError(null);
     try {
       await persistMeal(mealType, status, reason);
       setLastChange({ kind: "meal", mealType, previous });
@@ -265,16 +291,24 @@ export function CalendarView({
       setAnnouncement(
         `${MEAL_SLOT_LABELS[mealType]} is now ${status.replace("_", " ")}.`,
       );
-    } catch {
+    } catch (error) {
+      const publicError = apiErrorFromThrown(
+        error,
+        clientApiError(
+          "CHECKIN_SAVE_UNAVAILABLE",
+          "The meal status could not be saved.",
+          "The previous status was restored. Check the connection and try again.",
+          { retryable: true, action: { kind: "retry", label: "Try again" } },
+        ),
+      );
       replaceSelected((checkin) => ({
         ...checkin,
         slots: checkin.slots.map((slot) =>
           slot.mealType === mealType ? previous : slot,
         ),
       }));
-      setAnnouncement(
-        "The update could not be saved. The previous status was restored.",
-      );
+      setOperationError(publicError);
+      setAnnouncement(`${publicError.message} Error code: ${publicError.code}.`);
     } finally {
       setSaving(false);
     }
@@ -283,6 +317,13 @@ export function CalendarView({
   async function saveNotes() {
     if (saving || selectedDate > today) return;
     const previous = selectedCheckin.notes ?? "";
+    const fallback = clientApiError(
+      "CHECKIN_NOTE_SAVE_UNAVAILABLE",
+      "The note could not be saved.",
+      "The previous note was restored. Check the connection and try again.",
+      { retryable: true, action: { kind: "retry", label: "Try saving again" } },
+    );
+    setOperationError(null);
     setSaving(true);
     try {
       const response = await fetch(`/api/checkins/${selectedDate}`, {
@@ -290,18 +331,20 @@ export function CalendarView({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ kind: "note", notes: notes || null }),
       });
-      if (!response.ok) throw new Error("save_failed");
+      if (!response.ok) {
+        throw await apiErrorFromResponse(response, fallback);
+      }
       replaceSelected((checkin) => ({
         ...checkin,
         notes: notes || null,
       }));
       setLastChange({ kind: "note", previous });
       setAnnouncement("The note was saved.");
-    } catch {
+    } catch (error) {
+      const publicError = apiErrorFromThrown(error, fallback);
       setNotes(previous);
-      setAnnouncement(
-        "The note could not be saved. The previous note was restored.",
-      );
+      setOperationError(publicError);
+      setAnnouncement(`${publicError.message} Error code: ${publicError.code}.`);
     } finally {
       setSaving(false);
     }
@@ -309,6 +352,13 @@ export function CalendarView({
 
   async function undo() {
     if (!lastChange || saving) return;
+    const fallback = clientApiError(
+      "CHECKIN_UNDO_UNAVAILABLE",
+      "Undo could not be saved.",
+      "The latest saved state remains. Check the connection and try again.",
+      { retryable: true, action: { kind: "retry", label: "Try undo again" } },
+    );
+    setOperationError(null);
     setSaving(true);
     try {
       if (lastChange.kind === "meal") {
@@ -334,7 +384,9 @@ export function CalendarView({
             notes: lastChange.previous || null,
           }),
         });
-        if (!response.ok) throw new Error("undo_failed");
+        if (!response.ok) {
+          throw await apiErrorFromResponse(response, fallback);
+        }
         setNotes(lastChange.previous);
         replaceSelected((checkin) => ({
           ...checkin,
@@ -343,8 +395,10 @@ export function CalendarView({
       }
       setLastChange(null);
       setAnnouncement("The last saved change was undone.");
-    } catch {
-      setAnnouncement("Undo could not be saved. The latest state remains.");
+    } catch (error) {
+      const publicError = apiErrorFromThrown(error, fallback);
+      setOperationError(publicError);
+      setAnnouncement(`${publicError.message} Error code: ${publicError.code}.`);
     } finally {
       setSaving(false);
     }
@@ -377,6 +431,13 @@ export function CalendarView({
           else void loadMonth(currentMonth, today);
         }}>Today</button>
       </header>
+
+      {operationError ? (
+        <ApiErrorNotice
+          error={operationError}
+          heading="We could not complete that action"
+        />
+      ) : null}
 
       <div className="calendar-layout">
         <section className="card calendar-card" aria-label={`${monthLabel(month)} calendar`}>

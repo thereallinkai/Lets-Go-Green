@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { ExternalFoodError } from "./food-data-types";
 
-export const EXTERNAL_FOOD_PARSER_VERSION = "food-source-normalizer-v1";
+export const EXTERNAL_FOOD_PARSER_VERSION = "food-source-normalizer-v2";
 
 export function payloadSha256(payload: unknown): string {
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");

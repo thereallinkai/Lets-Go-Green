@@ -1269,6 +1269,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      abandon_food_label_upload: {
+        Args: { target_reservation_token: string; target_user_id: string }
+        Returns: boolean
+      }
       accept_plan: { Args: { target_plan_id: string }; Returns: string }
       add_daily_meal_item: {
         Args: {
@@ -1295,6 +1299,24 @@ export type Database = {
         Args: { expected_migration: string }
         Returns: Json
       }
+      begin_food_label_upload: {
+        Args: {
+          target_image_kind: Database["public"]["Enums"]["food_label_image_kind"]
+          target_object_path: string
+          target_preflight_token: string
+          target_sha256: string
+          target_submission_id: string
+          target_user_id: string
+        }
+        Returns: {
+          allowed: boolean
+          existing_image_id: string
+          existing_object_path: string
+          object_path: string
+          rate_limited: boolean
+          reservation_token: string
+        }[]
+      }
       cache_external_food: {
         Args: {
           normalized_food: Json
@@ -1305,6 +1327,10 @@ export type Database = {
           source_snapshot: Json
         }
         Returns: string
+      }
+      complete_food_label_object_cleanup: {
+        Args: { target_object_path: string; target_user_id: string }
+        Returns: boolean
       }
       complete_onboarding: {
         Args: {
@@ -1360,10 +1386,57 @@ export type Database = {
         Args: { target_item_id: string }
         Returns: string
       }
+      delete_weight_entry: {
+        Args: { target_entry_id: string }
+        Returns: string
+      }
+      finalize_food_label_upload: {
+        Args: {
+          target_byte_size: number
+          target_mime_type: string
+          target_pixel_height: number
+          target_pixel_width: number
+          target_reservation_token: string
+          target_sha256: string
+          target_submission_id: string
+          target_user_id: string
+        }
+        Returns: {
+          accepted: boolean
+          byte_size: number
+          image_id: string
+          image_kind: Database["public"]["Enums"]["food_label_image_kind"]
+          pixel_height: number
+          pixel_width: number
+          reservation_conflict: boolean
+        }[]
+      }
+      mark_food_label_upload_stored: {
+        Args: { target_reservation_token: string; target_user_id: string }
+        Returns: boolean
+      }
+      pending_food_label_object_cleanup: {
+        Args: { result_limit?: number; target_user_id: string }
+        Returns: {
+          object_path: string
+        }[]
+      }
       plan_eligible_food_ids: {
         Args: { candidate_food_ids: string[] }
         Returns: {
           food_id: string
+        }[]
+      }
+      preflight_food_label_upload: {
+        Args: {
+          target_image_kind: Database["public"]["Enums"]["food_label_image_kind"]
+          target_submission_id: string
+          target_user_id: string
+        }
+        Returns: {
+          allowed: boolean
+          preflight_token: string
+          rate_limited: boolean
         }[]
       }
       record_external_food_lookup: {
@@ -1373,19 +1446,7 @@ export type Database = {
         }
         Returns: boolean
       }
-      reserve_food_label_upload: {
-        Args: {
-          target_image_kind: Database["public"]["Enums"]["food_label_image_kind"]
-          target_submission_id: string
-          target_user_id: string
-        }
-        Returns: {
-          allowed: boolean
-          existing_image_id: string
-          existing_object_path: string
-          rate_limited: boolean
-        }[]
-      }
+      repair_verified_profile: { Args: never; Returns: Json }
       reserve_plan_generation: {
         Args: {
           request_idempotency_key: string
@@ -1413,6 +1474,29 @@ export type Database = {
           target_user_id: string
         }
         Returns: string
+      }
+      save_weight_entry: {
+        Args: {
+          entry_date: string
+          entry_source_display_unit: Database["public"]["Enums"]["weight_unit"]
+          entry_weight_kg: number
+        }
+        Returns: {
+          created_at: string
+          id: string
+          is_onboarding_baseline: boolean
+          local_date: string
+          source_display_unit: Database["public"]["Enums"]["weight_unit"]
+          updated_at: string
+          user_id: string
+          weight_kg: number
+        }
+        SetofOptions: {
+          from: "*"
+          to: "weight_entries"
+          isOneToOne: true
+          isSetofReturn: false
+        }
       }
       search_food_catalog: {
         Args: {
@@ -1508,6 +1592,29 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "food_label_submissions"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      update_weight_entry: {
+        Args: {
+          entry_source_display_unit: Database["public"]["Enums"]["weight_unit"]
+          entry_weight_kg: number
+          target_entry_id: string
+        }
+        Returns: {
+          created_at: string
+          id: string
+          is_onboarding_baseline: boolean
+          local_date: string
+          source_display_unit: Database["public"]["Enums"]["weight_unit"]
+          updated_at: string
+          user_id: string
+          weight_kg: number
+        }
+        SetofOptions: {
+          from: "*"
+          to: "weight_entries"
           isOneToOne: true
           isSetofReturn: false
         }
