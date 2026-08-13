@@ -123,7 +123,7 @@ where object.bucket_id = 'food-labels'
     from public.food_label_images image
     where image.object_path = object.name
   )
-on conflict (object_path) do nothing;
+on conflict on constraint food_label_object_cleanup_pkey do nothing;
 
 create function public.preflight_food_label_upload(
   target_user_id uuid,
@@ -336,7 +336,7 @@ begin
     'superseded'
   from superseded
   where superseded.status = 'cleanup_pending'
-  on conflict (object_path) do update
+  on conflict on constraint food_label_object_cleanup_pkey do update
   set
     reason = excluded.reason,
     queued_at = now();
@@ -460,7 +460,7 @@ begin
     reservation_record.submission_id,
     'superseded'
   )
-  on conflict (object_path) do update
+  on conflict on constraint food_label_object_cleanup_pkey do update
   set queued_at = now();
 
   return false;
@@ -594,7 +594,7 @@ begin
       reservation_record.submission_id,
       'cas_conflict'
     )
-    on conflict (object_path) do update
+    on conflict on constraint food_label_object_cleanup_pkey do update
     set
       reason = excluded.reason,
       queued_at = now();
@@ -611,38 +611,47 @@ begin
     return;
   end if;
 
-  insert into public.food_label_images (
-    submission_id,
-    user_id,
-    object_path,
-    image_kind,
-    mime_type,
-    byte_size,
-    pixel_width,
-    pixel_height,
-    sha256
-  )
-  values (
-    reservation_record.submission_id,
-    reservation_record.user_id,
-    reservation_record.object_path,
-    reservation_record.image_kind,
-    target_mime_type,
-    target_byte_size,
-    target_pixel_width,
-    target_pixel_height,
-    target_sha256
-  )
-  on conflict (submission_id, image_kind) do update
+  -- The advisory lock serializes this submission/image-kind pair. Use an
+  -- explicit update/insert instead of an ON CONFLICT inference clause so the
+  -- PL/pgSQL output parameter named image_kind can never shadow the column.
+  update public.food_label_images image
   set
-    object_path = excluded.object_path,
-    mime_type = excluded.mime_type,
-    byte_size = excluded.byte_size,
-    pixel_width = excluded.pixel_width,
-    pixel_height = excluded.pixel_height,
-    sha256 = excluded.sha256,
+    object_path = reservation_record.object_path,
+    mime_type = target_mime_type,
+    byte_size = target_byte_size,
+    pixel_width = target_pixel_width,
+    pixel_height = target_pixel_height,
+    sha256 = target_sha256,
     created_at = now()
-  returning id into saved_image_id;
+  where image.submission_id = reservation_record.submission_id
+    and image.image_kind = reservation_record.image_kind
+  returning image.id into saved_image_id;
+
+  if not found then
+    insert into public.food_label_images (
+      submission_id,
+      user_id,
+      object_path,
+      image_kind,
+      mime_type,
+      byte_size,
+      pixel_width,
+      pixel_height,
+      sha256
+    )
+    values (
+      reservation_record.submission_id,
+      reservation_record.user_id,
+      reservation_record.object_path,
+      reservation_record.image_kind,
+      target_mime_type,
+      target_byte_size,
+      target_pixel_width,
+      target_pixel_height,
+      target_sha256
+    )
+    returning id into saved_image_id;
+  end if;
 
   if current_object_path is not null
     and current_object_path <> reservation_record.object_path
@@ -663,7 +672,7 @@ begin
     from (values (1)) placeholder(value)
     left join private.food_label_upload_reservations prior
       on prior.object_path = current_object_path
-    on conflict (object_path) do update
+    on conflict on constraint food_label_object_cleanup_pkey do update
     set
       reason = excluded.reason,
       queued_at = now();
@@ -770,7 +779,7 @@ begin
     reservation_record.submission_id,
     'upload_failed'
   )
-  on conflict (object_path) do update
+  on conflict on constraint food_label_object_cleanup_pkey do update
   set
     reason = excluded.reason,
     queued_at = now();
@@ -827,7 +836,7 @@ begin
     stale.submission_id,
     'stale_reservation'
   from stale
-  on conflict (object_path) do update
+  on conflict on constraint food_label_object_cleanup_pkey do update
   set
     reason = excluded.reason,
     queued_at = now();

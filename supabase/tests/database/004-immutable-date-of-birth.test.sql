@@ -251,7 +251,7 @@ select throws_ok(
   'the Auth registration time zone is write-once'
 );
 
-select lives_ok(
+select throws_ok(
   $$
     update auth.users
     set email_confirmed_at = now()
