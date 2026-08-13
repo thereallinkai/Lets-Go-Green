@@ -349,7 +349,7 @@ values (
   'UTC'
 );
 
-select throws_ok(
+select lives_ok(
   $$
     update auth.users
     set email_confirmed_at = now()
