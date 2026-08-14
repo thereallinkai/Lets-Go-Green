@@ -245,6 +245,8 @@ select ok(
   ),
   'the first six submitted searches in a provider bucket are accepted'
 );
+
+reset role;
 select is(
   (
     select count(*)
@@ -256,6 +258,7 @@ select is(
   6::bigint,
   'six accepted searches create exactly six accounting rows'
 );
+set local role service_role;
 
 truncate table pg_temp.lookup_results;
 insert into pg_temp.lookup_results (sequence_number, result)
@@ -309,6 +312,8 @@ select is(
   ),
   'retrying a rejected search does not extend its cooldown'
 );
+
+reset role;
 select is(
   (
     select count(*)
@@ -320,6 +325,7 @@ select is(
   6::bigint,
   'rejected searches are never recorded'
 );
+set local role service_role;
 
 select is(
   (
@@ -332,6 +338,8 @@ select is(
   'true',
   'a saturated search bucket cannot block an import'
 );
+
+reset role;
 select is(
   (
     select count(*)
@@ -343,6 +351,7 @@ select is(
   1::bigint,
   'the accepted import uses its own accounting bucket'
 );
+set local role service_role;
 select is(
   (
     public.record_external_food_lookup(
@@ -366,11 +375,13 @@ select is(
   'one user cannot consume another user bucket'
 );
 
+reset role;
 update public.external_food_lookup_requests
 set requested_at = now() - interval '5 minutes 1 second'
 where user_id = '13000000-0000-4000-8000-000000000001'
   and provider = 'usda_fdc'
   and request_kind = 'search';
+set local role service_role;
 
 select is(
   (
@@ -383,6 +394,8 @@ select is(
   'true',
   'an expired search window immediately admits a new request'
 );
+
+reset role;
 select is(
   (
     select count(*)
@@ -406,6 +419,7 @@ select is(
   1::bigint,
   'expired limiter state is pruned when its bucket is used again'
 );
+set local role service_role;
 
 truncate table pg_temp.lookup_results;
 insert into pg_temp.lookup_results (sequence_number, result)
@@ -437,6 +451,8 @@ select is(
   'false',
   'the fifth import is bounded independently of search'
 );
+
+reset role;
 select is(
   (
     select count(*)
@@ -448,6 +464,7 @@ select is(
   4::bigint,
   'a rejected import does not add an accounting row'
 );
+set local role service_role;
 
 select ok(
   (
