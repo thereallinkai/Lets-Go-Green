@@ -178,11 +178,6 @@ values
     now()
   );
 
-create temporary table pg_temp.lookup_results (
-  sequence_number integer not null,
-  result jsonb not null
-);
-
 select set_config('request.jwt.claim.role', 'authenticated', true);
 select set_config(
   'request.jwt.claims',
@@ -212,6 +207,11 @@ select set_config(
   true
 );
 set local role service_role;
+
+create temporary table pg_temp.lookup_results (
+  sequence_number integer not null,
+  result jsonb not null
+);
 
 select throws_ok(
   $$
