@@ -3,6 +3,47 @@
 User-visible application releases are recorded here. Version identifiers follow
 the policy in [VERSIONING.md](VERSIONING.md).
 
+## 1.0.0-beta.5 — 2026-08-13
+
+**Let's Go Green! 1.0 Beta 5** makes onboarding food discovery shorter,
+clearer, and recoverable when an external source is temporarily limited.
+
+- Reworked Step 3 around one explicit destination for approved saved foods,
+  six initially visible ranked results, and an accessible **Show all remaining
+  matches** action.
+  Online candidates no longer show decorative Breakfast, Lunch, or Dinner
+  selectors: saving one creates a pending catalog-review record and does not
+  falsely imply that the food entered a meal.
+- Scoped an online-candidate import failure to the exact result card that
+  failed. Already loaded results remain visible, only the affected provider's
+  review actions pause during its cooldown, and the card states whether the
+  provider was contacted or any record was saved.
+- Balanced USDA lookup between generic Foundation/SR Legacy foods and branded
+  products, improved exact-name ranking, and collapsed duplicate-looking
+  records while preserving products with genuinely different formulations or
+  package details.
+- Preserved provider-reported product identifiers, retained package and
+  source-version metadata for safer visible-result deduplication, and expanded
+  vegetable categorization to include asparagus and other common produce names.
+- Separated provider-scoped search and import capacity into independent
+  five-minute buckets, so repeated searches cannot consume the reserved import
+  allowance. Limited responses include an exact body value and HTTP
+  `Retry-After`; rejected early retries do not extend the cooldown.
+- Reused only complete searches during the current Step 3 page session.
+  Partial provider responses stay usable but are not cached, allowing a
+  temporarily unavailable provider to recover on the next submission.
+- Updated the release metadata and food-provider identity to Beta 5, expanded
+  the manual test contract for populated and rate-limited search states, and
+  patched the transitive `fast-uri` denial-of-service advisory by pinning
+  4.1.2. The test runner now uses two workers to prevent fork-startup timeouts
+  on smaller development environments.
+
+The database migration in this release adds a validated search/import request
+kind, an indexed provider-and-kind rate bucket, an atomic trusted-server
+allowance RPC that returns the exact retry delay, and the Beta 5 health
+contract. Existing lookup history is preserved as search history, and no food,
+profile, plan, or label record is deleted.
+
 ## 1.0.0-beta.4 — 2026-08-12
 
 **Let's Go Green! 1.0 Beta 4** is a focused reliability and data-correctness

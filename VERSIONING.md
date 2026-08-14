@@ -6,15 +6,15 @@ notes, Git tags, and deployment labels must match it.
 
 ## Current release
 
-The current testing release is **Let's Go Green! 1.0 Beta 4**, represented by
-the Semantic Versioning identifier `1.0.0-beta.4`.
+The current testing release is **Let's Go Green! 1.0 Beta 5**, represented by
+the Semantic Versioning identifier `1.0.0-beta.5`.
 
 - `1.0.0` is the stable release this beta is preparing for.
 - `beta` makes it explicit that the app is still being tested.
-- `.4` identifies the fourth distributed beta build.
+- `.5` identifies the fifth distributed beta build.
 
 Beta versions sort before the corresponding stable version. The next testing
-build is `1.0.0-beta.5`; the stable release is `1.0.0`.
+build is `1.0.0-beta.6`; the stable release is `1.0.0`.
 
 ## Version bump policy
 

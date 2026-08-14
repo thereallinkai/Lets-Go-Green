@@ -2361,7 +2361,12 @@ export function OnboardingFlow({
             <>
               <p className="eyebrow">Step 3 of 6</p>
               <h1 id="onboarding-step-heading" tabIndex={-1}>What works on your plate?</h1>
-              <p>Add foods to each meal. Search, buttons, keyboard reordering, and drag-and-drop all lead to the same result.</p>
+              <p>
+                Choose a meal, then add foods that are ready for plans. Online
+                source matches can be compared and saved for catalog review;
+                saving one does not add it to a meal. Reorder chosen foods with
+                the keyboard or drag-and-drop.
+              </p>
               <div className="food-picker">
                 <FoodSearchPicker
                   foods={catalogFoods}

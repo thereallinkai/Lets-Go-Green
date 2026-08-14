@@ -7,7 +7,7 @@ import {
 import { createSupabaseAdminClient } from "@/src/lib/supabase/admin";
 
 const EXPECTED_MIGRATION =
-  "20260810050000_make_label_uploads_crash_recoverable";
+  "20260813000000_reserve_external_food_import_capacity";
 
 export async function GET() {
   let database: "reachable" | "unavailable" | "not_configured" = "not_configured";

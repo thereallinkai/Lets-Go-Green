@@ -8,8 +8,8 @@ The repository is a single full-stack TypeScript application built with Next.js 
 
 > **Wellness and safety:** Let's Go Green! provides general wellness information and is not medical advice. Individual needs can vary. Consult a qualified healthcare professional or registered dietitian when appropriate.
 
-The current testing build is **Let's Go Green! 1.0 Beta 4**
-(`1.0.0-beta.4`). See [VERSIONING.md](VERSIONING.md) for the release-number
+The current testing build is **Let's Go Green! 1.0 Beta 5**
+(`1.0.0-beta.5`). See [VERSIONING.md](VERSIONING.md) for the release-number
 policy and [CHANGELOG.md](CHANGELOG.md) for user-visible changes.
 
 ## Current feature set
@@ -28,9 +28,10 @@ The repository is structured to provide:
 - A searchable food catalog that distinguishes generic foods from exact brand,
   product, and flavor or variant records.
 - Expandable nutrition facts with energy, macronutrients, available micronutrients, measurement basis, source attribution, and verification status.
-- One authenticated, explicitly submitted food-name search that ranks saved
-  foods with USDA FoodData Central and Open Food Facts candidates, product
-  photos when supplied, server-side normalization, and a pending-review boundary.
+- One authenticated, explicitly submitted food-name search that balances
+  generic USDA foods with branded USDA and Open Food Facts products, collapses
+  duplicate-looking records, shows supplied product photos, and keeps imported
+  provider records behind a clearly labeled catalog-review boundary.
 - Private, sanitized nutrition-label photo upload and exact manual confirmation
   for a user-confirmed personal product; a separate opt-in can create one
   reusable normalized pending-review record without sharing the photo or
@@ -116,6 +117,16 @@ per 100 mL. The current plan engine imports only the mass-based form; a liquid
 Open Food Facts candidate is identified in search but rejected before any write
 instead of being mislabeled as grams. Its package-label path remains available
 when the label supplies a serving weight in grams.
+
+Food-name lookup is explicitly submitted. Typing only filters already saved
+foods. A successful complete search is reused while the current Step 3 page
+remains open; a partial response is not retained, so a temporarily unavailable
+provider can recover on the next submission. Search and import use separate,
+provider-scoped five-minute request buckets. The API reports the remaining wait
+in both the response body and `Retry-After`, and a rejected retry does not
+extend that wait. Saving an online candidate refetches it on the server and
+creates a pending catalog-review record; it does not assign that unreviewed
+record to Breakfast, Lunch, or Dinner.
 
 The deterministic broccoli, spinach, romaine lettuce, carrot, and tomato records
 include the conventional nutrition summary plus 19 additional nutrients from
@@ -230,14 +241,19 @@ Exact-product lookup runs on the server. Add these values to the ignored `.env.l
 USDA_FDC_API_KEY=
 
 # Descriptive application identity sent to food-data providers.
-FOOD_LOOKUP_USER_AGENT=LetsGoGreen/1.0.0-beta.4 (https://github.com/thereallinkai/Lets-Go-Green)
+FOOD_LOOKUP_USER_AGENT=LetsGoGreen/1.0.0-beta.5 (https://github.com/thereallinkai/Lets-Go-Green)
 ```
 
 - `USDA_FDC_API_KEY` is optional for local development because non-production mode can use the USDA `DEMO_KEY`. That shared key is rate-limited and is not a production configuration. Obtain and secure a data.gov key before relying on USDA lookup in a deployed environment.
 - `FOOD_LOOKUP_USER_AGENT` is not a secret, but it must be a descriptive value of at least eight characters. The committed default identifies this repository.
 - Open Food Facts name lookup does not require a key. Both providers require outbound network access and can be unavailable, incomplete, or rate-limited.
 - Online name lookup is user-triggered, not search-as-you-type. The server limits fields and result count because [Open Food Facts limits search requests and warns against search-as-you-type](https://openfoodfacts.github.io/documentation/docs/Product-Opener/api/).
-- Search results are candidates only. Import refetches the selected USDA or Open Food Facts record on the server, stores provenance and a source snapshot, and marks the normalized record `pending_review`.
+- Search results are candidates only. Saving one for catalog review refetches
+  the selected USDA or Open Food Facts record on the server, stores provenance
+  and a source snapshot, and marks the normalized record `pending_review`.
+- A complete result is cached only in the current Step 3 page session. Partial
+  provider responses are not cached, and the provider-specific retry delay is
+  shown when a source reaches its temporary limit.
 
 Provider configuration expands the catalog; it does not turn source-reported data into reviewed nutrition or make a pending record eligible for generated plans.
 

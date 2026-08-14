@@ -61,6 +61,13 @@ function nutrient(nutriments: UnknownRecord, key: string): number | null {
   return finiteNumber(nutriments[`${key}_100g`]);
 }
 
+function modifiedVersion(value: unknown): string | null {
+  const timestamp = finiteNumber(value);
+  if (timestamp === null) return null;
+  const date = new Date(timestamp * 1_000);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
 const NORMALIZED_WEIGHT_NUTRIENT_CODES = new Set([
   "added-sugars",
   "alpha-linolenic-acid",
@@ -285,6 +292,8 @@ export function openFoodFactsCandidateFromProduct(
     variantName: null,
     gtin: barcode,
     dataType: "Open Food Facts product",
+    packageDescription: text(product.quantity),
+    sourceVersion: modifiedVersion(product.last_modified_t),
     imageUrl: openFoodFactsImageUrl(
       product.image_front_small_url,
       product.image_front_url,
@@ -348,6 +357,7 @@ export async function searchOpenFoodFactsProducts(
       "serving_size",
       "serving_quantity_unit",
       "nutrition_data_per",
+      "last_modified_t",
       "image_front_small_url",
       "image_front_url",
       "image_nutrition_small_url",
@@ -358,8 +368,8 @@ export async function searchOpenFoodFactsProducts(
 
   const payload = await fetchProviderJson(url, options);
   const products = Array.isArray(payload.products) ? payload.products : [];
-  const seenBarcodes = new Set<string>();
-  return products.flatMap((raw): ExternalFoodCandidate[] => {
+  const byBarcode = new Map<string, ExternalFoodCandidate>();
+  for (const raw of products) {
     const product = record(raw);
     const barcode = digitsOnly(product.code);
     const productName = firstText(
@@ -368,10 +378,22 @@ export async function searchOpenFoodFactsProducts(
       product.generic_name_en,
       product.generic_name,
     );
-    if (!barcode || !productName || seenBarcodes.has(barcode)) return [];
-    seenBarcodes.add(barcode);
-    return [openFoodFactsCandidateFromProduct(barcode, product)];
-  });
+    if (!barcode || !productName) {
+      continue;
+    }
+    const candidate = openFoodFactsCandidateFromProduct(barcode, product);
+    const identity = [
+      normalizedExternalSlug(candidate.displayName, "open_food_facts", "compare"),
+      text(product.quantity) ?? "",
+      candidate.nutritionReferenceUnit,
+      candidate.nutritionPreview.calories ?? "",
+      candidate.nutritionPreview.proteinGrams ?? "",
+      candidate.nutritionPreview.carbohydrateGrams ?? "",
+      candidate.nutritionPreview.fatGrams ?? "",
+    ].join(":");
+    if (!byBarcode.has(identity)) byBarcode.set(identity, candidate);
+  }
+  return [...byBarcode.values()];
 }
 
 export async function loadOpenFoodFactsProduct(
@@ -381,15 +403,15 @@ export async function loadOpenFoodFactsProduct(
     fetcher?: typeof fetch;
   },
 ): Promise<NormalizedExternalFood> {
-  const barcode = digitsOnly(barcodeInput);
-  if (!barcode) {
+  const requestedBarcode = digitsOnly(barcodeInput);
+  if (!requestedBarcode) {
     throw new ExternalFoodError(
       "not_found",
       "Enter an 8- to 14-digit product barcode.",
     );
   }
   const url = new URL(
-    `https://world.openfoodfacts.org/api/v3/product/${barcode}`,
+    `https://world.openfoodfacts.org/api/v3/product/${requestedBarcode}`,
   );
   url.searchParams.set(
     "fields",
@@ -420,6 +442,13 @@ export async function loadOpenFoodFactsProduct(
   const product = record(payload.product);
   if (!Object.keys(product).length) {
     throw new ExternalFoodError("not_found", "No product uses that barcode.");
+  }
+  const barcode = digitsOnly(product.code) ?? requestedBarcode;
+  if (barcode !== requestedBarcode) {
+    throw new ExternalFoodError(
+      "invalid_response",
+      "Open Food Facts returned a different product identifier.",
+    );
   }
   const candidate = openFoodFactsCandidateFromProduct(barcode, product);
   if (candidate.nutritionReferenceUnit === "ml") {
@@ -465,7 +494,7 @@ export async function loadOpenFoodFactsProduct(
       product_name: productName,
       variant_name: null,
       manufacturer_name: text(product.brand_owner),
-      gtin: barcode,
+      gtin: candidate.gtin,
       package_description: text(product.quantity),
       country_codes: stringArray(product.countries_tags)
         .map((country) => country.replace(/^[a-z]{2}:/, ""))

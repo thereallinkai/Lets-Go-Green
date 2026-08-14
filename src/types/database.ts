@@ -227,18 +227,21 @@ export type Database = {
         Row: {
           id: string
           provider: Database["public"]["Enums"]["food_source_provider"]
+          request_kind: string
           requested_at: string
           user_id: string
         }
         Insert: {
           id?: string
           provider: Database["public"]["Enums"]["food_source_provider"]
+          request_kind: string
           requested_at?: string
           user_id: string
         }
         Update: {
           id?: string
           provider?: Database["public"]["Enums"]["food_source_provider"]
+          request_kind?: string
           requested_at?: string
           user_id?: string
         }
@@ -1441,10 +1444,11 @@ export type Database = {
       }
       record_external_food_lookup: {
         Args: {
+          lookup_kind: string
           lookup_provider: Database["public"]["Enums"]["food_source_provider"]
           target_user_id: string
         }
-        Returns: boolean
+        Returns: Json
       }
       repair_verified_profile: { Args: never; Returns: Json }
       reserve_plan_generation: {

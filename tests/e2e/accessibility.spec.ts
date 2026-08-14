@@ -92,6 +92,56 @@ test("registration and onboarding controls reflow at required widths", async ({
   }
 });
 
+test("populated Step 3 keeps one explicit meal destination and a bounded result stack", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    window.localStorage.removeItem("lets-go-green-onboarding-draft:demo");
+  });
+
+  for (const width of [320, 375]) {
+    await page.setViewportSize({ width, height: 1_000 });
+    await page.goto("/onboarding?step=3");
+
+    const destination = page.getByRole("combobox", {
+      name: "Meal destination for saved foods",
+    });
+    await expect(destination).toHaveValue("");
+    await expect(
+      page.getByRole("button", {
+        name: "Choose a meal before adding Apples",
+      }),
+    ).toBeDisabled();
+
+    const results = page.locator(
+      '[aria-label="Food search results"] article',
+    );
+    await expect(results).toHaveCount(6);
+    const showAll = page.getByRole("button", {
+      name: /^Show all \d+ remaining matches?$/,
+    });
+    await expect(showAll).toBeVisible();
+    await showAll.click();
+    await expect(results).toHaveCount(28);
+    const translucentResults = await results.evaluateAll((cards) =>
+      cards.filter(
+        (card) => Number.parseFloat(getComputedStyle(card).opacity) < 1,
+      ).length,
+    );
+    expect(
+      translucentResults,
+      "result entrance motion must preserve text contrast",
+    ).toBe(0);
+
+    await destination.selectOption("lunch");
+    await expect(
+      page.getByRole("button", { name: "Add Rolled oats to lunch" }),
+    ).toBeEnabled();
+    await expectNoHorizontalOverflow(page, `populated food onboarding at ${width}px`);
+    await expectNoHighImpactViolations(page);
+  }
+});
+
 test("protected mock pages have no serious or critical axe violations", async ({
   page,
 }) => {
