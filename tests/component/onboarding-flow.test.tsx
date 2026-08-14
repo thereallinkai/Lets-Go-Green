@@ -845,6 +845,13 @@ describe("OnboardingFlow food preferences", () => {
       screen.queryByRole("heading", { name: "White rice" }),
     ).not.toBeInTheDocument();
 
+    await user.selectOptions(
+      screen.getByRole("combobox", {
+        name: "Meal destination for saved foods",
+      }),
+      "breakfast",
+    );
+
     await user.click(
       screen.getByRole("button", {
         name: "Add Rolled oats to breakfast",
@@ -907,10 +914,10 @@ describe("OnboardingFlow food preferences", () => {
     });
     expect(addToBreakfast).toBeDisabled();
     expect(
-      screen.getByRole("combobox", {
+      screen.queryByRole("combobox", {
         name: "Destination for My protein drink",
       }),
-    ).toBeDisabled();
+    ).not.toBeInTheDocument();
 
     await user.click(addToBreakfast);
     expect(
@@ -921,6 +928,19 @@ describe("OnboardingFlow food preferences", () => {
   it("supports accessible reordering and removal alternatives", async () => {
     const user = userEvent.setup();
     render(<OnboardingFlow initialStep={3} />);
+
+    await user.selectOptions(
+      screen.getByRole("combobox", {
+        name: "Meal destination for saved foods",
+      }),
+      "breakfast",
+    );
+
+    await user.click(
+      screen.getByRole("button", {
+        name: /^Show all \d+ remaining matches$/,
+      }),
+    );
 
     await user.click(
       screen.getByRole("button", {

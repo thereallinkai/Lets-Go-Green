@@ -12,6 +12,7 @@ export type ApiError = {
   details?: string;
   action?: ApiErrorAction;
   retryable?: boolean;
+  retryAfterSeconds?: number;
 };
 
 export type PublicErrorDefinition = ApiError & { status: number };

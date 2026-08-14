@@ -230,12 +230,17 @@ describe("FoodSearchPicker smart discovery", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("requires an explicit meal destination before Add", async () => {
+  it("requires one explicit meal destination, never silently defaults to Breakfast, and keeps Lunch for saved foods", async () => {
     const user = userEvent.setup();
     const onAdd = vi.fn();
+    const secondFood = {
+      ...localFood,
+      id: "22222222-2222-4222-8222-222222222222",
+      name: "Local Tofu",
+    };
     render(
       <FoodSearchPicker
-        foods={[localFood]}
+        foods={[localFood, secondFood]}
         search=""
         onSearchChange={vi.fn()}
         onAdd={onAdd}
@@ -244,16 +249,26 @@ describe("FoodSearchPicker smart discovery", () => {
     );
 
     const destination = screen.getByRole("combobox", {
-      name: "Destination for Local Whey Protein",
+      name: "Meal destination for saved foods",
     });
-    expect(destination).toHaveValue("breakfast");
+    expect(destination).toHaveValue("");
+    expect(
+      screen.getByRole("button", {
+        name: "Choose a meal before adding Local Whey Protein",
+      }),
+    ).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /to breakfast/i })).not.toBeInTheDocument();
+
     await user.selectOptions(destination, "lunch");
     await user.click(
       screen.getByRole("button", { name: "Add Local Whey Protein to lunch" }),
     );
 
     expect(onAdd).toHaveBeenCalledWith("lunch", localFood);
-    expect(screen.getAllByRole("button", { name: /^Add .* to / })).toHaveLength(1);
+    expect(destination).toHaveValue("lunch");
+    expect(
+      screen.getByRole("button", { name: "Add Local Tofu to lunch" }),
+    ).toBeEnabled();
   });
 
   it("keeps partial provider results usable and recovers from an import failure", async () => {
@@ -323,28 +338,39 @@ describe("FoodSearchPicker smart discovery", () => {
 
     expect(screen.getByText(/Some source results are unavailable/i)).toBeInTheDocument();
     expect(screen.getByText(offCandidate.displayName)).toBeInTheDocument();
-    const destination = screen.getByRole("combobox", {
-      name: `Intended destination for ${offCandidate.displayName}`,
-    });
-    fireEvent.change(destination, { target: { value: "dinner" } });
+    expect(
+      screen.queryByRole("combobox", {
+        name: new RegExp(offCandidate.displayName, "i"),
+      }),
+    ).not.toBeInTheDocument();
     const importButton = screen.getByRole("button", {
-      name: `Import ${offCandidate.displayName} for Dinner review`,
+      name: `Save ${offCandidate.displayName} for catalog review`,
     });
 
     fireEvent.click(importButton);
     await act(async () => Promise.resolve());
-    expect(await screen.findByRole("alert")).toHaveTextContent(
+    const sourceCard = screen.getByRole("heading", {
+      level: 3,
+      name: offCandidate.displayName,
+    }).closest("article")!;
+    expect(await within(sourceCard).findByRole("alert")).toHaveTextContent(
       "Open Food Facts is temporarily unavailable.",
     );
-    expect(screen.getByRole("alert")).toHaveTextContent(
+    expect(within(sourceCard).getByRole("alert")).toHaveTextContent(
       "Error code: FOOD_SOURCE_UNAVAILABLE",
     );
+    expect(screen.getByText(/Some source results are unavailable/i)).toBeInTheDocument();
+    expect(screen.getByText(offCandidate.displayName)).toBeInTheDocument();
     expect(importButton).toBeEnabled();
 
-    fireEvent.click(importButton);
+    fireEvent.click(
+      within(sourceCard).getByRole("button", { name: "Retry import" }),
+    );
     await act(async () => Promise.resolve());
-    expect(await screen.findByText(/Dinner is your intended destination/i)).toBeInTheDocument();
-    expect(screen.getByText("Imported for Dinner review")).toBeInTheDocument();
+    expect(await within(sourceCard).findByRole("status")).toHaveTextContent(
+      "Saved for catalog review. It was not added to a meal.",
+    );
+    expect(within(sourceCard).queryByText(/intended destination/i)).not.toBeInTheDocument();
     expect(importButton).toBeDisabled();
   });
 
@@ -410,6 +436,527 @@ describe("FoodSearchPicker smart discovery", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("combines visually identical source records despite different IDs and package codes", async () => {
+    vi.useFakeTimers();
+    const duplicate = {
+      ...offCandidate,
+      externalId: "9999999999999",
+      gtin: "9999999999999",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        kind: "candidates",
+        candidates: [offCandidate, duplicate],
+        providers: [
+          {
+            provider: "open_food_facts",
+            status: "ok",
+            resultCount: 2,
+            message: null,
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <FoodSearchPicker
+        foods={[]}
+        search="chocolate whey"
+        onSearchChange={vi.fn()}
+        onAdd={vi.fn()}
+        onCatalogChanged={vi.fn(async () => true)}
+      />,
+    );
+    await runCatalogDebounce();
+    fireEvent.click(screen.getByRole("button", { name: "Search all sources" }));
+    await act(async () => Promise.resolve());
+
+    const results = screen.getByLabelText("Food search results");
+    expect(within(results).getAllByRole("heading", { level: 3 })).toHaveLength(1);
+    expect(screen.getByText("Showing 1 of 1 unique match")).toBeInTheDocument();
+  });
+
+  it("keeps a source formulation whose name matches a saved food but identifier differs", async () => {
+    vi.useFakeTimers();
+    const sourceVariant = {
+      ...offCandidate,
+      packageDescription: "2 lb tub",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          kind: "candidates",
+          candidates: [sourceVariant],
+          providers: [
+            {
+              provider: "open_food_facts",
+              status: "ok",
+              resultCount: 1,
+              message: null,
+            },
+          ],
+        }),
+      ),
+    );
+
+    render(
+      <FoodSearchPicker
+        foods={[
+          {
+            ...localFood,
+            id: "22222222-2222-4222-8222-222222222222",
+            name: offCandidate.displayName,
+            brandName: null,
+            variantName: null,
+            gtin: "111111111111",
+          },
+        ]}
+        search="chocolate whey"
+        onSearchChange={vi.fn()}
+        onAdd={vi.fn()}
+        onCatalogChanged={vi.fn(async () => true)}
+      />,
+    );
+    await runCatalogDebounce();
+    fireEvent.click(screen.getByRole("button", { name: "Search all sources" }));
+    await act(async () => Promise.resolve());
+
+    expect(
+      screen.getAllByRole("heading", {
+        level: 3,
+        name: offCandidate.displayName,
+      }),
+    ).toHaveLength(2);
+    expect(screen.getByText(/Package 2 lb tub/)).toBeInTheDocument();
+  });
+
+  it("shows six unique matches initially and reveals the remaining matches on request", async () => {
+    vi.useFakeTimers();
+    const candidates = Array.from({ length: 8 }, (_, index) => ({
+      ...usdaAsparagus,
+      externalId: `asparagus-${index + 1}`,
+      displayName: `Farm ${index + 1} — Asparagus`,
+      productName: `Farm ${index + 1} Asparagus`,
+      gtin: `000000000000${index + 1}`,
+      dataType: "Branded",
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          kind: "candidates",
+          candidates,
+          providers: [
+            {
+              provider: "usda_fdc",
+              status: "ok",
+              resultCount: 8,
+              message: null,
+            },
+          ],
+        }),
+      ),
+    );
+
+    render(
+      <FoodSearchPicker
+        foods={[]}
+        search="asparagus"
+        onSearchChange={vi.fn()}
+        onAdd={vi.fn()}
+        onCatalogChanged={vi.fn(async () => true)}
+      />,
+    );
+    await runCatalogDebounce();
+    fireEvent.click(screen.getByRole("button", { name: "Search all sources" }));
+    await act(async () => Promise.resolve());
+
+    const results = screen.getByLabelText("Food search results");
+    expect(within(results).getAllByRole("heading", { level: 3 })).toHaveLength(6);
+    expect(screen.getByText("Showing 6 of 8 unique matches")).toBeInTheDocument();
+    const showAll = screen.getByRole("button", {
+      name: "Show all 2 remaining matches",
+    });
+    expect(showAll).toHaveAttribute("aria-expanded", "false");
+    showAll.focus();
+    fireEvent.click(showAll);
+    expect(within(results).getAllByRole("heading", { level: 3 })).toHaveLength(8);
+    expect(screen.getByText("Showing 8 of 8 unique matches")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show fewer matches" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Show fewer matches" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+  });
+
+  it("scopes a 429 to its source card and blocks that provider until Retry-After expires", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          kind: "candidates",
+          candidates: [offCandidate],
+          providers: [
+            {
+              provider: "open_food_facts",
+              status: "ok",
+              resultCount: 1,
+              message: null,
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: null,
+            error: {
+              code: "FOOD_IMPORT_RATE_LIMITED",
+              message: "Wait before making another lookup.",
+              details: "Nothing was saved.",
+              retryable: true,
+              action: { kind: "wait", label: "Wait, then try again" },
+            },
+          }),
+          {
+            status: 429,
+            headers: {
+              "content-type": "application/json",
+              "retry-after": "2",
+            },
+          },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <FoodSearchPicker
+        foods={[]}
+        search="chocolate whey"
+        onSearchChange={vi.fn()}
+        onAdd={vi.fn()}
+        onCatalogChanged={vi.fn(async () => true)}
+      />,
+    );
+    await runCatalogDebounce();
+    fireEvent.click(screen.getByRole("button", { name: "Search all sources" }));
+    await act(async () => Promise.resolve());
+    const card = screen.getByRole("heading", {
+      level: 3,
+      name: offCandidate.displayName,
+    }).closest("article")!;
+
+    await act(async () => {
+      fireEvent.click(
+        within(card).getByRole("button", {
+          name: `Save ${offCandidate.displayName} for catalog review`,
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    expect(within(card).getByRole("alert")).toHaveTextContent(
+      "Error code: FOOD_IMPORT_RATE_LIMITED",
+    );
+    expect(screen.getByText(/Source results for “chocolate whey” are ready/i)).toBeInTheDocument();
+    const cooldownButton = within(card).getByRole("button", {
+      name: `Saving ${offCandidate.displayName} is temporarily unavailable`,
+    });
+    expect(cooldownButton).toBeDisabled();
+    expect(cooldownButton).toHaveTextContent("Wait 2s");
+
+    const rateLimitedAt = Date.now();
+    await act(async () => {
+      // Simulate a throttled background tab: wall-clock time advances without
+      // interval callbacks, then focus forces an exact deadline refresh.
+      vi.setSystemTime(rateLimitedAt + 2_100);
+      window.dispatchEvent(new Event("focus"));
+      await Promise.resolve();
+    });
+    expect(within(card).queryByRole("alert")).not.toBeInTheDocument();
+    expect(
+      within(card).getByRole("button", {
+        name: `Save ${offCandidate.displayName} for catalog review`,
+      }),
+    ).toBeEnabled();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not resurrect an expired card error during a later provider cooldown", async () => {
+    vi.useFakeTimers();
+    const secondCandidate = {
+      ...offCandidate,
+      externalId: "748927022651",
+      displayName: "Optimum Nutrition — Vanilla Whey",
+      productName: "Vanilla Whey",
+      gtin: "748927022651",
+    };
+    const limitedResponse = () =>
+      new Response(
+        JSON.stringify({
+          data: null,
+          error: {
+            code: "FOOD_IMPORT_RATE_LIMITED",
+            message: "Wait before saving another source record.",
+            details: "No provider request was sent.",
+            retryable: true,
+            retryAfterSeconds: 1,
+            action: { kind: "wait", label: "Wait, then try again" },
+          },
+        }),
+        {
+          status: 429,
+          headers: {
+            "content-type": "application/json",
+            "retry-after": "1",
+          },
+        },
+      );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          kind: "candidates",
+          candidates: [offCandidate, secondCandidate],
+          providers: [
+            {
+              provider: "open_food_facts",
+              status: "ok",
+              resultCount: 2,
+              message: null,
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(limitedResponse())
+      .mockResolvedValueOnce(limitedResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <FoodSearchPicker
+        foods={[]}
+        search="whey"
+        onSearchChange={vi.fn()}
+        onAdd={vi.fn()}
+        onCatalogChanged={vi.fn(async () => true)}
+      />,
+    );
+    await runCatalogDebounce();
+    fireEvent.click(screen.getByRole("button", { name: "Search all sources" }));
+    await act(async () => Promise.resolve());
+    const firstCard = screen
+      .getByRole("heading", { level: 3, name: offCandidate.displayName })
+      .closest("article")!;
+    const secondCard = screen
+      .getByRole("heading", { level: 3, name: secondCandidate.displayName })
+      .closest("article")!;
+
+    fireEvent.click(
+      within(firstCard).getByRole("button", {
+        name: `Save ${offCandidate.displayName} for catalog review`,
+      }),
+    );
+    await act(async () => Promise.resolve());
+    expect(within(firstCard).getByRole("alert")).toBeInTheDocument();
+
+    const limitedAt = Date.now();
+    await act(async () => {
+      vi.setSystemTime(limitedAt + 1_100);
+      window.dispatchEvent(new Event("focus"));
+      await Promise.resolve();
+    });
+    expect(within(firstCard).queryByRole("alert")).not.toBeInTheDocument();
+
+    fireEvent.click(
+      within(secondCard).getByRole("button", {
+        name: `Save ${secondCandidate.displayName} for catalog review`,
+      }),
+    );
+    await act(async () => Promise.resolve());
+    expect(within(secondCard).getByRole("alert")).toBeInTheDocument();
+    expect(within(firstCard).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("expires partial provider results instead of indefinitely reusing them", async () => {
+    vi.useFakeTimers();
+    const response = {
+      kind: "candidates" as const,
+      candidates: [offCandidate],
+      providers: [
+        {
+          provider: "usda_fdc" as const,
+          status: "rate_limited" as const,
+          resultCount: 0,
+          message: "USDA is temporarily rate limited.",
+        },
+        {
+          provider: "open_food_facts" as const,
+          status: "ok" as const,
+          resultCount: 1,
+          message: null,
+        },
+      ],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    function Harness() {
+      const [search, setSearch] = useState("chocolate whey");
+      return (
+        <FoodSearchPicker
+          foods={[]}
+          search={search}
+          onSearchChange={setSearch}
+          onAdd={vi.fn()}
+          onCatalogChanged={vi.fn(async () => true)}
+        />
+      );
+    }
+
+    render(<Harness />);
+    await runCatalogDebounce();
+    fireEvent.click(screen.getByRole("button", { name: "Search all sources" }));
+    await act(async () => Promise.resolve());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_001);
+    });
+    const input = screen.getByRole("textbox", { name: "Search foods and products" });
+    fireEvent.change(input, { target: { value: "" } });
+    await runCatalogDebounce();
+    fireEvent.change(input, { target: { value: "chocolate whey" } });
+    await runCatalogDebounce();
+    fireEvent.click(screen.getByRole("button", { name: "Search all sources" }));
+    await act(async () => Promise.resolve());
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores an older provider response that resolves after a newer query", async () => {
+    vi.useFakeTimers();
+    let resolveOlder!: (response: Response) => void;
+    const olderResponse = new Promise<Response>((resolve) => {
+      resolveOlder = resolve;
+    });
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(() => olderResponse)
+      .mockResolvedValueOnce(
+        jsonResponse({
+          kind: "candidates",
+          candidates: [usdaAsparagus],
+          providers: [
+            {
+              provider: "usda_fdc",
+              status: "ok",
+              resultCount: 1,
+              message: null,
+            },
+          ],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    function Harness() {
+      const [search, setSearch] = useState("chocolate whey");
+      return (
+        <FoodSearchPicker
+          foods={[]}
+          search={search}
+          onSearchChange={setSearch}
+          onAdd={vi.fn()}
+          onCatalogChanged={vi.fn(async () => true)}
+        />
+      );
+    }
+
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "Search all sources" }));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const input = screen.getByRole("textbox", {
+      name: "Search foods and products",
+    });
+    fireEvent.change(input, { target: { value: "asparagus" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search all sources" }));
+    await act(async () => Promise.resolve());
+    expect(
+      screen.getByRole("heading", { level: 3, name: "Asparagus, raw" }),
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      resolveOlder(
+        jsonResponse({
+          kind: "candidates",
+          candidates: [offCandidate],
+          providers: [
+            {
+              provider: "open_food_facts",
+              status: "ok",
+              resultCount: 1,
+              message: null,
+            },
+          ],
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    expect(
+      screen.getByRole("heading", { level: 2, name: "Best matches for “asparagus”" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", {
+        level: 3,
+        name: offCandidate.displayName,
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("ignores a saved-catalog failure from an obsolete query", async () => {
+    vi.useFakeTimers();
+    let resolveOlder!: (result: boolean) => void;
+    const olderRefresh = new Promise<boolean>((resolve) => {
+      resolveOlder = resolve;
+    });
+    const onCatalogChanged = vi.fn((query?: string) =>
+      query === "older query" ? olderRefresh : Promise.resolve(true),
+    );
+
+    function Harness() {
+      const [search, setSearch] = useState("older query");
+      return (
+        <FoodSearchPicker
+          foods={[]}
+          search={search}
+          onSearchChange={setSearch}
+          onAdd={vi.fn()}
+          onCatalogChanged={onCatalogChanged}
+        />
+      );
+    }
+
+    render(<Harness />);
+    await runCatalogDebounce();
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Search foods and products" }),
+      { target: { value: "newer query" } },
+    );
+    await runCatalogDebounce();
+
+    await act(async () => {
+      resolveOlder(false);
+      await Promise.resolve();
+    });
+
+    expect(onCatalogChanged).toHaveBeenCalledWith("older query");
+    expect(onCatalogChanged).toHaveBeenCalledWith("newer query");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("imports once, then retries only the saved-food refresh when refresh resolves false", async () => {
     vi.useFakeTimers();
     const fetchMock = vi
@@ -464,10 +1011,14 @@ describe("FoodSearchPicker smart discovery", () => {
     fireEvent.click(screen.getByRole("button", { name: "Search all sources" }));
     await act(async () => Promise.resolve());
     vi.useRealTimers();
+    const sourceCard = screen.getByRole("heading", {
+      level: 3,
+      name: offCandidate.displayName,
+    }).closest("article")!;
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: `Import ${offCandidate.displayName} for Breakfast review`,
+        name: `Save ${offCandidate.displayName} for catalog review`,
       }),
     );
 
@@ -477,16 +1028,22 @@ describe("FoodSearchPicker smart discovery", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(onCatalogChanged).toHaveBeenCalledTimes(2);
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Refresh saved foods" }),
-    );
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Refresh saved foods" }),
+      );
+      await Promise.resolve();
+    });
 
-    expect(await screen.findByText("Saved foods are up to date.")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(within(sourceCard).getByRole("status")).toHaveTextContent(
+      "Saved for catalog review. It was not added to a meal.",
+    );
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(onCatalogChanged).toHaveBeenCalledTimes(3);
     expect(
       screen.getByRole("button", {
-        name: `Import ${offCandidate.displayName} for Breakfast review`,
+        name: `Save ${offCandidate.displayName} for catalog review`,
       }),
     ).toBeDisabled();
   });

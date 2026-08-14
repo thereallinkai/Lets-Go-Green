@@ -1495,10 +1495,10 @@ set local role service_role;
 select ok(
   (
     public.application_health(
-      '20260810050000_make_label_uploads_crash_recoverable'
+      '20260813000000_reserve_external_food_import_capacity'
     ) ->> 'migrationCompatible'
   )::boolean,
-  'application health accepts the complete enabled beta.4 database contract'
+  'the prior full database contract remains enabled under beta.5'
 );
 
 select is(
@@ -1518,7 +1518,7 @@ set local role service_role;
 select is(
   (
     public.application_health(
-      '20260810050000_make_label_uploads_crash_recoverable'
+      '20260813000000_reserve_external_food_import_capacity'
     ) ->> 'migrationCompatible'
   )::boolean,
   false,

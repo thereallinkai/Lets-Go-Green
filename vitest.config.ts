@@ -18,7 +18,9 @@ export default defineConfig({
       "tests/component/**/*.test.{ts,tsx}",
     ],
     exclude: ["tests/e2e/**", "node_modules/**", ".next/**"],
-    maxWorkers: 4,
+    // Two workers avoid fork-startup starvation on smaller Codespaces and
+    // developer laptops while still keeping the suite fast and deterministic.
+    maxWorkers: 2,
     clearMocks: true,
     restoreMocks: true,
     coverage: {

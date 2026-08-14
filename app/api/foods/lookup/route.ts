@@ -43,7 +43,45 @@ type RpcResult = {
   error: { code?: string; message?: string } | null;
 };
 
-function providerError(error: unknown) {
+type LookupKind = "search" | "import";
+
+type LookupAllowance = {
+  allowed: boolean;
+  retryAfterSeconds: number;
+  error: RpcResult["error"];
+};
+
+// Provider adapters currently expose a stable rate_limited code but not a
+// trustworthy reset timestamp. Use the same conservative five-minute window
+// until a provider supplies a validated Retry-After value.
+const DEFAULT_PROVIDER_RETRY_SECONDS = 300;
+
+function normalizedRetryAfterSeconds(value: unknown, fallback = 1) {
+  const seconds = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(seconds) && seconds > 0
+    ? Math.ceil(seconds)
+    : fallback;
+}
+
+function rateLimitedResponse(
+  code: string,
+  message: string,
+  details: string,
+  retryAfterSeconds: number,
+) {
+  const seconds = normalizedRetryAfterSeconds(retryAfterSeconds);
+  const options: Parameters<typeof apiError>[3] = {
+    details,
+    retryable: true,
+    action: { kind: "wait", label: "Wait, then try again" },
+    retryAfterSeconds: seconds,
+  };
+  const response = apiError(code, message, 429, options);
+  response.headers.set("Retry-After", String(seconds));
+  return response;
+}
+
+function providerImportError(error: unknown) {
   if (!(error instanceof ExternalFoodError)) {
     return apiError(
       "FOOD_PROVIDER_UNAVAILABLE",
@@ -110,16 +148,11 @@ function providerError(error: unknown) {
     );
   }
   if (error.code === "rate_limited") {
-    return apiError(
+    return rateLimitedResponse(
       "FOOD_SOURCE_RATE_LIMITED",
       "The selected food source reached its temporary request limit.",
-      429,
-      {
-        details:
-          "Nothing was imported. Wait a few minutes before trying this source again.",
-        retryable: true,
-        action: { kind: "wait", label: "Wait, then try again" },
-      },
+      "Nothing was imported. Wait before trying this source again.",
+      DEFAULT_PROVIDER_RETRY_SECONDS,
     );
   }
   if (error.code === "invalid_response") {
@@ -170,6 +203,10 @@ function providerSearchFailure(
       status: error.code === "rate_limited" ? "rate_limited" : "unavailable",
       resultCount: 0,
       message: `${providerName} ${reason}`,
+      retryAfterSeconds:
+        error.code === "rate_limited"
+          ? DEFAULT_PROVIDER_RETRY_SECONDS
+          : null,
     };
   }
   return {
@@ -177,6 +214,7 @@ function providerSearchFailure(
     status: "unavailable",
     resultCount: 0,
     message: `${providerName} could not be reached. You can retry or use a package-label photo.`,
+    retryAfterSeconds: null,
   };
 }
 
@@ -269,15 +307,43 @@ export async function POST(request: Request) {
       name: string,
       args: Record<string, unknown>,
     ) => Promise<RpcResult>;
-    const recordProviderLookup = async (provider: ExternalFoodProvider) => {
+    const recordProviderLookup = async (
+      provider: ExternalFoodProvider,
+      lookupKind: LookupKind,
+    ): Promise<LookupAllowance> => {
       const { data, error } = await recordLookup(
         "record_external_food_lookup",
         {
           target_user_id: auth.user.id,
           lookup_provider: provider,
+          lookup_kind: lookupKind,
         },
       );
-      return { allowed: data === true, error };
+      if (error) {
+        return { allowed: false, retryAfterSeconds: 0, error };
+      }
+      if (
+        !data ||
+        typeof data !== "object" ||
+        typeof (data as { allowed?: unknown }).allowed !== "boolean"
+      ) {
+        return {
+          allowed: false,
+          retryAfterSeconds: 0,
+          error: { code: "invalid_lookup_allowance" },
+        };
+      }
+      const allowance = data as {
+        allowed: boolean;
+        retryAfterSeconds?: unknown;
+      };
+      return {
+        allowed: allowance.allowed,
+        retryAfterSeconds: allowance.allowed
+          ? 0
+          : normalizedRetryAfterSeconds(allowance.retryAfterSeconds),
+        error: null,
+      };
     };
     const usdaApiKey =
       env.USDA_FDC_API_KEY ??
@@ -292,7 +358,20 @@ export async function POST(request: Request) {
         candidates: ExternalFoodCandidate[];
         status: ExternalFoodProviderStatus;
       }> => {
-        const allowance = await recordProviderLookup(provider);
+        if (provider === "usda_fdc" && !usdaApiKey) {
+          return {
+            candidates: [],
+            status: {
+              provider,
+              status: "unavailable",
+              resultCount: 0,
+              message:
+                "USDA FoodData Central is not configured. Open Food Facts results may still be available.",
+              retryAfterSeconds: null,
+            },
+          };
+        }
+        const allowance = await recordProviderLookup(provider, "search");
         if (allowance.error) {
           return {
             candidates: [],
@@ -302,6 +381,7 @@ export async function POST(request: Request) {
               resultCount: 0,
               message:
                 `${provider === "usda_fdc" ? "USDA FoodData Central" : "Open Food Facts"} search accounting could not be checked. Retry in a moment.`,
+              retryAfterSeconds: null,
             },
           };
         }
@@ -313,19 +393,8 @@ export async function POST(request: Request) {
               status: "rate_limited",
               resultCount: 0,
               message:
-                `${provider === "usda_fdc" ? "USDA FoodData Central" : "Open Food Facts"} reached its temporary lookup limit. Retry in a few minutes.`,
-            },
-          };
-        }
-        if (provider === "usda_fdc" && !usdaApiKey) {
-          return {
-            candidates: [],
-            status: {
-              provider,
-              status: "unavailable",
-              resultCount: 0,
-              message:
-                "USDA FoodData Central is not configured. Open Food Facts results may still be available.",
+                `${provider === "usda_fdc" ? "USDA FoodData Central" : "Open Food Facts"} reached its temporary search limit. Retry in ${allowance.retryAfterSeconds} seconds.`,
+              retryAfterSeconds: allowance.retryAfterSeconds,
             },
           };
         }
@@ -347,6 +416,7 @@ export async function POST(request: Request) {
               status: "ok",
               resultCount: candidates.length,
               message: null,
+              retryAfterSeconds: null,
             },
           };
         } catch (error) {
@@ -374,6 +444,9 @@ export async function POST(request: Request) {
         kind: "candidates" as const,
         candidates,
         providers: searches.map((search) => search.status),
+        cacheable: searches.every(
+          (search) => search.status.status === "ok",
+        ),
       });
     }
 
@@ -383,7 +456,28 @@ export async function POST(request: Request) {
         parsed.data.provider === "open_food_facts")
         ? "open_food_facts"
         : "usda_fdc";
-    const allowance = await recordProviderLookup(requestedProvider);
+    if (requestedProvider === "usda_fdc" && !usdaApiKey) {
+      return apiError(
+        "USDA_LOOKUP_NOT_CONFIGURED",
+        parsed.data.action === "import"
+          ? "This USDA food cannot be imported because USDA lookup is not configured."
+          : "USDA lookup is not configured. Search the same name with Open Food Facts or upload the package label.",
+        503,
+        {
+          details:
+            "The USDA request was not sent. An administrator must configure USDA_FDC_API_KEY before this source can be used.",
+          retryable: false,
+          action: {
+            kind: "contact_support",
+            label: "Contact the site administrator",
+          },
+        },
+      );
+    }
+    const allowance = await recordProviderLookup(
+      requestedProvider,
+      parsed.data.action === "import" ? "import" : "search",
+    );
     if (allowance.error) {
       return apiError(
         "FOOD_LOOKUP_UNAVAILABLE",
@@ -398,39 +492,23 @@ export async function POST(request: Request) {
       );
     }
     if (!allowance.allowed) {
-      return apiError(
-        "FOOD_LOOKUP_RATE_LIMITED",
-        "Wait a few minutes before making another external food lookup.",
-        429,
-        {
-          details:
-            "The provider was not contacted and no food was imported. Waiting prevents another request from extending the temporary limit.",
-          retryable: true,
-          action: { kind: "wait", label: "Wait, then try again" },
-        },
+      const isImport = parsed.data.action === "import";
+      return rateLimitedResponse(
+        isImport ? "FOOD_IMPORT_RATE_LIMITED" : "FOOD_SEARCH_RATE_LIMITED",
+        isImport
+          ? `This food can be imported in ${allowance.retryAfterSeconds} seconds.`
+          : `Search this source again in ${allowance.retryAfterSeconds} seconds.`,
+        isImport
+          ? "The provider was not contacted and this food was not imported. Search capacity is separate, so you can still compare already loaded results while you wait. Retrying early will not extend the wait."
+          : "The provider was not contacted. Import capacity is reserved separately, so an already loaded result can still be imported. Retrying early will not extend the wait.",
+        allowance.retryAfterSeconds,
       );
     }
 
     if (parsed.data.action === "search_usda") {
-      if (!usdaApiKey) {
-        return apiError(
-          "USDA_LOOKUP_NOT_CONFIGURED",
-          "USDA lookup is not configured. Search the same name with Open Food Facts or upload the package label.",
-          503,
-          {
-            details:
-              "The USDA request was not sent. An administrator must configure USDA_FDC_API_KEY before this source can be used.",
-            retryable: false,
-            action: {
-              kind: "contact_support",
-              label: "Contact the site administrator",
-            },
-          },
-        );
-      }
       const candidates = await searchUsdaFoods(parsed.data.query, {
         ...providerOptions,
-        apiKey: usdaApiKey,
+        apiKey: usdaApiKey!,
       });
       return apiSuccess({ kind: "candidates" as const, candidates });
     }
@@ -473,16 +551,29 @@ export async function POST(request: Request) {
       201,
     );
   } catch (error) {
-    if (error instanceof ExternalFoodError) return providerError(error);
+    if (parsed.data.action !== "import") {
+      return apiError(
+        "FOOD_SEARCH_FAILED",
+        "The external food search could not be completed.",
+        503,
+        {
+          details:
+            "No catalog record was saved. Retry the search, use the other source when available, or add a manually confirmed package label.",
+          retryable: true,
+          action: { kind: "retry", label: "Retry food search" },
+        },
+      );
+    }
+    if (error instanceof ExternalFoodError) return providerImportError(error);
     return apiError(
       "FOOD_IMPORT_FAILED",
-      "The source record could not be saved for catalog review.",
+      "The catalog save result could not be confirmed.",
       500,
       {
         details:
-          "Nothing was added to a meal. Retry the import once, choose another result, or add the package label manually.",
+          "Nothing was added to a meal. The idempotent provider save may already exist; retry once to reuse it, choose another result, or add the package label manually.",
         retryable: true,
-        action: { kind: "retry", label: "Retry import" },
+        action: { kind: "retry", label: "Retry catalog save" },
       },
     );
   }

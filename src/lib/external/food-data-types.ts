@@ -11,6 +11,8 @@ export type ExternalFoodCandidate = {
   variantName: string | null;
   gtin: string | null;
   dataType: string | null;
+  packageDescription?: string | null;
+  sourceVersion?: string | null;
   imageUrl: string | null;
   nutritionImageUrl: string | null;
   nutritionReferenceUnit: "g" | "ml" | "unknown";
@@ -27,6 +29,7 @@ export type ExternalFoodProviderStatus = {
   status: "ok" | "unavailable" | "rate_limited";
   resultCount: number;
   message: string | null;
+  retryAfterSeconds?: number | null;
 };
 
 export type NormalizedExternalFood = {
@@ -121,7 +124,11 @@ export function inferCategorySlugs(text: string): string[] {
     result.add("supplement");
   }
   if (/\b(milk|yogurt|cheese|dairy)\b/.test(normalized)) result.add("dairy");
-  if (/\b(vegetable|broccoli|spinach|lettuce|carrot|tomato)\b/.test(normalized)) {
+  if (
+    /\b(vegetables?|asparagus|artichokes?|beets?|broccoli|brussels? sprouts?|cabbage|carrots?|cauliflower|celery|chard|collard greens?|cucumbers?|eggplants?|green beans?|kale|leeks?|lettuce|mushrooms?|okra|onions?|peas?|peppers?|radishes?|spinach|squash|tomatoes?|turnips?|zucchini)\b/.test(
+      normalized,
+    )
+  ) {
     result.add("vegetable");
   }
   if (/\b(fruit|berry|banana|apple|orange)\b/.test(normalized)) result.add("fruit");

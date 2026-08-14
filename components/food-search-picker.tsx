@@ -48,12 +48,31 @@ type CandidateResponse = {
   kind: "candidates";
   candidates: ExternalFoodCandidate[];
   providers?: ExternalFoodProviderStatus[];
+  cacheable?: boolean;
 };
 
 type ImportResponse = {
   kind: "imported";
   displayName: string;
   reviewStatus: string;
+};
+
+type SearchCacheEntry = {
+  cachedAt: number;
+  candidates: ExternalFoodCandidate[];
+  providers: ExternalFoodProviderStatus[];
+};
+
+type CandidateFailure = {
+  error: ApiError;
+  waitsForCooldown: boolean;
+  retryKind: "import" | "catalog";
+  refreshQuery?: string;
+};
+
+type ProviderCooldown = {
+  deadlineMs: number;
+  remainingSeconds: number;
 };
 
 type RankedResult =
@@ -72,19 +91,89 @@ type RankedResult =
 
 type RetryRequest =
   | { kind: "search"; query: string }
-  | {
-      kind: "import";
-      candidate: ExternalFoodCandidate;
-      destination: Meal;
-    }
   | { kind: "catalog"; query: string };
 
 const CATALOG_DELAY_MS = 300;
+const INITIAL_RESULT_COUNT = 6;
+const COMPLETE_SEARCH_CACHE_TTL_MS = 30 * 60 * 1_000;
+const PARTIAL_SEARCH_CACHE_TTL_MS = 30 * 1_000;
+const DEFAULT_IMPORT_COOLDOWN_SECONDS = 5 * 60;
 const mealLabels: Record<Meal, string> = {
   breakfast: "Breakfast",
   lunch: "Lunch",
   dinner: "Dinner",
 };
+
+function coreNutritionIdentity(candidate: ExternalFoodCandidate) {
+  const value = (amount: number | null) =>
+    amount === null ? "missing" : String(Math.round(amount * 1_000) / 1_000);
+  const nutrition = candidate.nutritionPreview;
+  return [
+    candidate.nutritionReferenceUnit,
+    value(nutrition.calories),
+    value(nutrition.proteinGrams),
+    value(nutrition.carbohydrateGrams),
+    value(nutrition.fatGrams),
+  ].join(":");
+}
+
+function sourceVisibleIdentity(candidate: ExternalFoodCandidate) {
+  return `${normalizedText(candidate.displayName)}:${normalizedText(candidate.variantName ?? "")}:${normalizedText(candidatePackageDescription(candidate) ?? "")}:${coreNutritionIdentity(candidate)}`;
+}
+
+function candidatePackageDescription(candidate: ExternalFoodCandidate) {
+  const value = candidate.packageDescription;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function searchCacheTtl(entry: SearchCacheEntry) {
+  return entry.providers.some((provider) => provider.status !== "ok")
+    ? PARTIAL_SEARCH_CACHE_TTL_MS
+    : COMPLETE_SEARCH_CACHE_TTL_MS;
+}
+
+function retryAfterSeconds(response: Response, payload: unknown) {
+  const object =
+    payload && typeof payload === "object" && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : null;
+  const error =
+    object?.error && typeof object.error === "object" && !Array.isArray(object.error)
+      ? (object.error as Record<string, unknown>)
+      : null;
+  const numericCandidates = [
+    error?.retryAfterSeconds,
+    error?.retry_after_seconds,
+    object?.retryAfterSeconds,
+    object?.retry_after_seconds,
+  ];
+  for (const value of numericCandidates) {
+    const parsed = typeof value === "number" ? value : Number(value);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.min(3_600, Math.ceil(parsed));
+    }
+  }
+
+  const header = response.headers.get("retry-after");
+  if (!header) return null;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds) && seconds > 0) {
+    return Math.min(3_600, Math.ceil(seconds));
+  }
+  const date = Date.parse(header);
+  if (!Number.isFinite(date)) return null;
+  return Math.min(3_600, Math.max(1, Math.ceil((date - Date.now()) / 1_000)));
+}
+
+function formatCooldown(seconds: number) {
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return minutes ? `${minutes}:${String(remainder).padStart(2, "0")}` : `${remainder}s`;
+}
+
+function cooldownDeadline(waitSeconds: number) {
+  return Date.now() + waitSeconds * 1_000;
+}
 
 function normalizedText(value: string) {
   return value
@@ -171,18 +260,22 @@ export function FoodSearchPicker({
   const [retryRequest, setRetryRequest] = useState<RetryRequest | null>(null);
   const [importingKey, setImportingKey] = useState<string | null>(null);
   const [importedKeys, setImportedKeys] = useState<Set<string>>(() => new Set());
-  const [destinations, setDestinations] = useState<Record<string, Meal>>({});
+  const [destinationMeal, setDestinationMeal] = useState<Meal | "">("");
+  const [candidateFailures, setCandidateFailures] = useState<
+    Record<string, CandidateFailure>
+  >({});
+  const [providerCooldowns, setProviderCooldowns] = useState<
+    Partial<Record<ExternalFoodCandidate["provider"], ProviderCooldown>>
+  >({});
+  const [visibleResultCount, setVisibleResultCount] = useState(
+    INITIAL_RESULT_COUNT,
+  );
   const catalogCallbackRef = useRef(onCatalogChanged);
   const activeRequestRef = useRef<AbortController | null>(null);
   const errorRef = useRef<HTMLDivElement>(null);
+  const candidateErrorRefs = useRef(new Map<string, HTMLDivElement>());
   const searchCacheRef = useRef(
-    new Map<
-      string,
-      {
-        candidates: ExternalFoodCandidate[];
-        providers: ExternalFoodProviderStatus[];
-      }
-    >(),
+    new Map<string, SearchCacheEntry>(),
   );
 
   useEffect(() => {
@@ -191,13 +284,63 @@ export function FoodSearchPicker({
 
   const reportError = useCallback(
     (nextError: ApiError, retry: RetryRequest | null = null) => {
-      setNotice(null);
       setError(nextError);
       setRetryRequest(retry);
       window.requestAnimationFrame(() => errorRef.current?.focus());
     },
     [],
   );
+
+  useEffect(() => {
+    if (!Object.keys(providerCooldowns).length) return;
+    const refreshCooldowns = () => {
+      const currentTime = Date.now();
+      const expiredProviders: ExternalFoodCandidate["provider"][] = [];
+      let changed = false;
+      const next: Partial<
+        Record<ExternalFoodCandidate["provider"], ProviderCooldown>
+      > = {};
+      for (const [provider, cooldown] of Object.entries(
+        providerCooldowns,
+      ) as Array<
+        [ExternalFoodCandidate["provider"], ProviderCooldown]
+      >) {
+        const remainingSeconds = Math.max(
+          0,
+          Math.ceil((cooldown.deadlineMs - currentTime) / 1_000),
+        );
+        if (remainingSeconds > 0) {
+          next[provider] = { ...cooldown, remainingSeconds };
+        } else {
+          expiredProviders.push(provider);
+        }
+        if (remainingSeconds !== cooldown.remainingSeconds) changed = true;
+      }
+      if (changed) setProviderCooldowns(next);
+      if (expiredProviders.length) {
+        const expired = new Set(expiredProviders);
+        setCandidateFailures((current) =>
+          Object.fromEntries(
+            Object.entries(current).filter(([key, failure]) => {
+              const provider = key.split(
+                ":",
+                1,
+              )[0] as ExternalFoodCandidate["provider"];
+              return !(failure.waitsForCooldown && expired.has(provider));
+            }),
+          ),
+        );
+      }
+    };
+    const timer = window.setInterval(refreshCooldowns, 1_000);
+    window.addEventListener("focus", refreshCooldowns);
+    document.addEventListener("visibilitychange", refreshCooldowns);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshCooldowns);
+      document.removeEventListener("visibilitychange", refreshCooldowns);
+    };
+  }, [providerCooldowns]);
 
   const applySearchResult = useCallback(
     (
@@ -211,6 +354,7 @@ export function FoodSearchPicker({
       const availableProviders = providers.filter((provider) => provider.status === "ok");
       if (failedProviders.length && !availableProviders.length) {
         setPhase("error");
+        setNotice(null);
         const allRateLimited = failedProviders.every(
           (provider) => provider.status === "rate_limited",
         );
@@ -257,7 +401,7 @@ export function FoodSearchPicker({
       } else {
         setNotice({
           text: nextCandidates.length
-            ? `Found ${nextCandidates.length} source ${nextCandidates.length === 1 ? "match" : "matches"} for “${query}”. Compare them with saved foods below.`
+            ? `Source results for “${query}” are ready. Duplicates are combined below so you can compare each distinct match once.`
             : `No source match was found for “${query}”. Try a simpler name or use a package-label photo.`,
         });
       }
@@ -270,10 +414,17 @@ export function FoodSearchPicker({
       const query = rawQuery.trim().replace(/\s+/g, " ");
       const cacheKey = normalizedText(query);
       if (query.length < 2) return;
+      setVisibleResultCount(INITIAL_RESULT_COUNT);
       const cached = searchCacheRef.current.get(cacheKey);
-      if (cached && !force) {
+      const cacheIsFresh =
+        cached && Date.now() - cached.cachedAt < searchCacheTtl(cached);
+      if (cached && cacheIsFresh && !force) {
+        searchCacheRef.current.set(cacheKey, cached);
         applySearchResult(query, cached.candidates, cached.providers);
         return;
+      }
+      if (cached && !cacheIsFresh) {
+        searchCacheRef.current.delete(cacheKey);
       }
 
       activeRequestRef.current?.abort();
@@ -310,19 +461,36 @@ export function FoodSearchPicker({
         ) {
           throw apiErrorFromPayload(result, invalidResponse);
         }
+        if (
+          controller.signal.aborted ||
+          activeRequestRef.current !== controller
+        ) {
+          return;
+        }
         const providers = Array.isArray(result.data.providers)
           ? result.data.providers
           : [];
-        searchCacheRef.current.set(cacheKey, {
+        const cacheEntry: SearchCacheEntry = {
+          cachedAt: Date.now(),
           candidates: result.data.candidates,
           providers,
-        });
+        };
+        if (result.data.cacheable !== false) {
+          searchCacheRef.current.set(cacheKey, cacheEntry);
+        }
         applySearchResult(query, result.data.candidates, providers);
       } catch (error) {
-        if (error instanceof Error && error.name === "AbortError") return;
+        if (
+          controller.signal.aborted ||
+          activeRequestRef.current !== controller ||
+          (error instanceof Error && error.name === "AbortError")
+        ) {
+          return;
+        }
         setPhase("error");
         setCandidates([]);
         setProviderStatuses([]);
+        setNotice(null);
         reportError(
           apiErrorFromPayload(
             { error },
@@ -349,15 +517,18 @@ export function FoodSearchPicker({
 
   useEffect(() => {
     const query = search.trim();
+    let cancelled = false;
     const timer = window.setTimeout(() => {
       void Promise.resolve()
         .then(() => catalogCallbackRef.current(query))
         .then((refreshed) => {
+          if (cancelled) return;
           if (refreshed === false) {
             throw new Error("catalog_refresh_not_confirmed");
           }
         })
         .catch(() => {
+          if (cancelled) return;
           reportError(
             clientApiError(
               "SAVED_FOOD_SEARCH_FAILED",
@@ -372,7 +543,10 @@ export function FoodSearchPicker({
           );
         });
     }, CATALOG_DELAY_MS);
-    return () => window.clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [reportError, search]);
 
   useEffect(
@@ -403,23 +577,20 @@ export function FoodSearchPicker({
           (food.planEligible ? 90 : 20),
       }));
 
-    const savedIdentities = new Set(
-      localResults.flatMap((result) => {
-        if (result.kind !== "saved") return [];
-        return [
-          result.food.gtin ? `id:${result.food.gtin}` : "",
-          `name:${normalizedText(
-            `${result.food.brandName ?? ""} ${result.food.name} ${result.food.variantName ?? ""}`,
-          )}`,
-        ].filter(Boolean);
-      }),
+    const savedGtins = new Set(
+      localResults.flatMap((result) =>
+        result.kind === "saved" && result.food.gtin ? [result.food.gtin] : [],
+      ),
     );
     const sourceByIdentity = new Map<string, ExternalFoodCandidate>();
     for (const candidate of candidates) {
-      const identity = candidate.gtin
-        ? `id:${candidate.gtin}`
-        : `name:${normalizedText(candidate.displayName)}`;
-      if (savedIdentities.has(identity)) continue;
+      if (candidate.gtin && savedGtins.has(candidate.gtin)) {
+        continue;
+      }
+      // Search providers can return the same visible product under multiple
+      // record IDs or package codes. Merge only when both the displayed identity
+      // and all four normalized core values match; distinct formulations remain.
+      const identity = sourceVisibleIdentity(candidate);
       const previous = sourceByIdentity.get(identity);
       const completeness = Object.values(candidate.nutritionPreview).filter(
         (value) => value !== null,
@@ -472,22 +643,36 @@ export function FoodSearchPicker({
       .slice(0, 30);
   }, [candidates, foods, search]);
 
-  async function importCandidate(candidate: ExternalFoodCandidate, destination: Meal) {
+  const visibleResults = rankedResults.slice(0, visibleResultCount);
+
+  function reportCandidateFailure(key: string, failure: CandidateFailure) {
+    setCandidateFailures((current) => ({ ...current, [key]: failure }));
+    window.requestAnimationFrame(() => candidateErrorRefs.current.get(key)?.focus());
+  }
+
+  async function importCandidate(candidate: ExternalFoodCandidate) {
     const key = `${candidate.provider}:${candidate.externalId}`;
-    if (importingKey || importedKeys.has(key)) return;
+    const providerCooldown = providerCooldowns[candidate.provider];
+    if (
+      importingKey ||
+      importedKeys.has(key) ||
+      (providerCooldown?.remainingSeconds ?? 0) > 0
+    ) {
+      return;
+    }
     setImportingKey(key);
-    setError(null);
-    setRetryRequest(null);
-    setNotice({
-      text: `Importing ${candidate.displayName} from ${providerLabel(candidate.provider)} for review before ${mealLabels[destination]} use…`,
+    setCandidateFailures((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
     });
     const invalidResponse = clientApiError(
       "FOOD_IMPORT_RESPONSE_INVALID",
-      "The source record was not imported.",
-      `The ${providerLabel(candidate.provider)} import service returned an unreadable response. Nothing was added to ${mealLabels[destination]}.`,
+      "The catalog save result could not be confirmed.",
+      `The ${providerLabel(candidate.provider)} response was unreadable. The idempotent save may already have completed, but nothing was added to a meal. Try the same save once; the existing provider record will be reused rather than duplicated.`,
       {
         retryable: true,
-        action: { kind: "retry", label: "Retry import" },
+        action: { kind: "retry", label: "Try saving again" },
       },
     );
     let imported: ImportResponse;
@@ -508,53 +693,113 @@ export function FoodSearchPicker({
         result.data.kind !== "imported" ||
         typeof result.data.displayName !== "string"
       ) {
-        throw apiErrorFromPayload(result, invalidResponse);
+        let nextError = apiErrorFromPayload(result, invalidResponse);
+        const isRateLimited =
+          response.status === 429 || nextError.code.includes("RATE_LIMITED");
+        let waitsForCooldown = false;
+        if (isRateLimited) {
+          const waitSeconds =
+            retryAfterSeconds(response, result) ??
+            DEFAULT_IMPORT_COOLDOWN_SECONDS;
+          waitsForCooldown = true;
+          const deadlineMs = cooldownDeadline(waitSeconds);
+          setProviderCooldowns((current) => ({
+            ...current,
+            [candidate.provider]: {
+              deadlineMs,
+              remainingSeconds: waitSeconds,
+            },
+          }));
+          nextError = {
+            ...nextError,
+            retryable: true,
+            action: {
+              kind: "wait",
+              label: `Wait ${formatCooldown(waitSeconds)}, then try again`,
+            },
+          };
+        }
+        reportCandidateFailure(key, {
+          error: nextError,
+          waitsForCooldown,
+          retryKind: "import",
+        });
+        return;
       }
       imported = result.data;
       setImportedKeys((current) => new Set(current).add(key));
-      setNotice({
-        text: `${imported.displayName} was imported for catalog review. ${mealLabels[destination]} is your intended destination on this screen, but the food was not added. After approval, choose it from saved foods and Add.`,
-      });
     } catch (error) {
-      reportError(
-        apiErrorFromPayload(
+      reportCandidateFailure(key, {
+        error: apiErrorFromPayload(
           { error },
           clientApiError(
             "FOOD_IMPORT_NETWORK_ERROR",
-            "The source record was not imported.",
-            `The import service could not be reached. Nothing was added to ${mealLabels[destination]}; check the connection and try again or use a package-label photo.`,
+            "The catalog save result could not be confirmed.",
+            "The connection ended before the app received a result. The idempotent save may already have completed, but nothing was added to a meal. Check the connection and try the same save once; the provider record will be reused rather than duplicated.",
             {
               retryable: true,
-              action: { kind: "retry", label: "Retry import" },
+              action: { kind: "retry", label: "Try saving again" },
             },
           ),
         ),
-        { kind: "import", candidate, destination },
-      );
-      setImportingKey(null);
+        waitsForCooldown: false,
+        retryKind: "import",
+      });
       return;
+    } finally {
+      setImportingKey(null);
     }
 
     try {
       const refreshed = await catalogCallbackRef.current(imported.displayName);
-      if (refreshed === false) {
-        throw new Error("catalog_refresh_not_confirmed");
-      }
+      if (refreshed === false) throw new Error("catalog_refresh_not_confirmed");
+      setCandidateFailures((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
     } catch {
-      reportError(
-        clientApiError(
+      reportCandidateFailure(key, {
+        error: clientApiError(
           "FOOD_IMPORT_REFRESH_FAILED",
-          `${imported.displayName} was imported, but saved results did not refresh.`,
-          `The imported record remains pending catalog review and was not added to ${mealLabels[destination]}. Retry the refresh; do not import the same source record again.`,
+          `${imported.displayName} was saved, but saved results did not refresh.`,
+          "The source record is still pending catalog review and was not added to a meal. Refresh saved foods; do not save this source record again.",
           {
             retryable: true,
             action: { kind: "retry", label: "Refresh saved foods" },
           },
         ),
-        { kind: "catalog", query: imported.displayName },
-      );
-    } finally {
-      setImportingKey(null);
+        waitsForCooldown: false,
+        retryKind: "catalog",
+        refreshQuery: imported.displayName,
+      });
+    }
+  }
+
+  async function retryCandidateCatalog(key: string, query: string) {
+    try {
+      const refreshed = await catalogCallbackRef.current(query);
+      if (refreshed === false) throw new Error("catalog_refresh_not_confirmed");
+      setCandidateFailures((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+    } catch {
+      reportCandidateFailure(key, {
+        error: clientApiError(
+          "FOOD_IMPORT_REFRESH_FAILED",
+          `${query} is saved, but saved results still could not refresh.`,
+          "The source record remains pending catalog review and was not added to a meal. Try refreshing later; do not save this source record again.",
+          {
+            retryable: true,
+            action: { kind: "retry", label: "Refresh saved foods" },
+          },
+        ),
+        waitsForCooldown: false,
+        retryKind: "catalog",
+        refreshQuery: query,
+      });
     }
   }
 
@@ -564,11 +809,6 @@ export function FoodSearchPicker({
       await runSmartSearch(retryRequest.query, true);
       return;
     }
-    if (retryRequest.kind === "import") {
-      await importCandidate(retryRequest.candidate, retryRequest.destination);
-      return;
-    }
-
     setError(null);
     setRetryRequest(null);
     setNotice({ text: "Refreshing saved foods…" });
@@ -581,7 +821,7 @@ export function FoodSearchPicker({
         clientApiError(
           "SAVED_FOOD_SEARCH_FAILED",
           "Saved foods still could not be refreshed.",
-          "The current results remain on screen. Check the connection and try again later; do not repeat an already successful import.",
+          "The current results remain on screen. Check the connection and try again later; do not repeat an already successful catalog save.",
           {
             retryable: true,
             action: { kind: "retry", label: "Retry saved-food search" },
@@ -590,6 +830,19 @@ export function FoodSearchPicker({
         retryRequest,
       );
     }
+  }
+
+  function changeSearch(value: string) {
+    activeRequestRef.current?.abort();
+    onSearchChange(value);
+    setCandidates([]);
+    setProviderStatuses([]);
+    setNotice(null);
+    setError(null);
+    setRetryRequest(null);
+    setCandidateFailures({});
+    setVisibleResultCount(INITIAL_RESULT_COUNT);
+    setPhase(value.trim().length >= 2 ? "waiting" : "idle");
   }
 
   const query = search.trim();
@@ -613,17 +866,7 @@ export function FoodSearchPicker({
             <input
               value={search}
               maxLength={120}
-              onChange={(event) => {
-                activeRequestRef.current?.abort();
-                const value = event.target.value;
-                onSearchChange(value);
-                setCandidates([]);
-                setProviderStatuses([]);
-                setNotice(null);
-                setError(null);
-                setRetryRequest(null);
-                setPhase(value.trim().length >= 2 ? "waiting" : "idle");
-              }}
+              onChange={(event) => changeSearch(event.target.value)}
               placeholder="Try asparagus, tofu, a brand, or a flavor"
               autoComplete="off"
             />
@@ -638,14 +881,33 @@ export function FoodSearchPicker({
         </form>
         <p className={styles.searchDisclosure}>
           Typing filters saved foods and never contacts an external provider.
-          “Search all sources” sends the name once to USDA FoodData Central and
-          Open Food Facts; repeated searches are reused during this visit.
+          “Search all sources” sends the name to USDA FoodData Central and
+          Open Food Facts; repeated complete searches are reused only while this
+          page remains open.
         </p>
         <ol className={styles.workflow} aria-label="How food search works">
           <li><span>1</span> Type to filter saved foods immediately.</li>
           <li><span>2</span> Search all sources, then compare nutrition.</li>
           <li><span>3</span> Choose Breakfast, Lunch, or Dinner before Add.</li>
         </ol>
+        <label className={styles.mealDestination}>
+          <span>Add saved foods to</span>
+          <select
+            aria-label="Meal destination for saved foods"
+            required
+            value={destinationMeal}
+            onChange={(event) => setDestinationMeal(event.target.value as Meal | "")}
+          >
+            <option value="">Choose a meal…</option>
+            {(Object.keys(mealLabels) as Meal[]).map((meal) => (
+              <option value={meal} key={meal}>{mealLabels[meal]}</option>
+            ))}
+          </select>
+          <small>
+            This choice applies only to approved saved foods. Online source
+            matches must be reviewed before they can be added to any meal.
+          </small>
+        </label>
         {error ? (
           <ApiErrorNotice
             actionDisabled={isSearching || Boolean(importingKey)}
@@ -683,14 +945,24 @@ export function FoodSearchPicker({
               {query ? `Best matches for “${query}”` : "Saved foods"}
             </h2>
           </div>
-          {isSearching ? <span className={styles.searchingBadge}>Searching…</span> : null}
+          {isSearching ? (
+            <span className={styles.searchingBadge}>Searching…</span>
+          ) : rankedResults.length ? (
+            <span className={styles.resultCount} aria-live="polite">
+              Showing {Math.min(visibleResultCount, rankedResults.length)} of{" "}
+              {rankedResults.length} unique {rankedResults.length === 1 ? "match" : "matches"}
+            </span>
+          ) : null}
         </div>
 
-        <div className={styles.resultList} aria-label="Food search results">
-          {rankedResults.map((result) => {
+        <div
+          className={styles.resultList}
+          id="food-search-result-list"
+          aria-label="Food search results"
+        >
+          {visibleResults.map((result) => {
             if (result.kind === "saved") {
               const { food } = result;
-              const destination = destinations[result.key] ?? "breakfast";
               return (
                 <article className={styles.resultCard} key={result.key}>
                   <div className={styles.resultCopy}>
@@ -723,36 +995,26 @@ export function FoodSearchPicker({
                     ) : null}
                   </div>
                   <div className={styles.addControls}>
-                    <label>
-                      <span>Add to</span>
-                      <select
-                        aria-label={`Destination for ${food.name}`}
-                        value={destination}
-                        disabled={!food.planEligible}
-                        onChange={(event) =>
-                          setDestinations((current) => ({
-                            ...current,
-                            [result.key]: event.target.value as Meal,
-                          }))
-                        }
-                      >
-                        {(Object.keys(mealLabels) as Meal[]).map((meal) => (
-                          <option value={meal} key={meal}>{mealLabels[meal]}</option>
-                        ))}
-                      </select>
-                    </label>
                     <button
                       className="button button-dark"
-                      disabled={!food.planEligible}
+                      disabled={!food.planEligible || !destinationMeal}
                       type="button"
                       aria-label={
-                        food.planEligible
-                          ? `Add ${food.name} to ${destination}`
-                          : `${food.name} needs review`
+                        !food.planEligible
+                          ? `${food.name} needs review`
+                          : destinationMeal
+                            ? `Add ${food.name} to ${destinationMeal}`
+                            : `Choose a meal before adding ${food.name}`
                       }
-                      onClick={() => onAdd(destination, food)}
+                      onClick={() => {
+                        if (destinationMeal) onAdd(destinationMeal, food);
+                      }}
                     >
-                      {food.planEligible ? `Add to ${mealLabels[destination]}` : "Needs review"}
+                      {!food.planEligible
+                        ? "Needs review"
+                        : destinationMeal
+                          ? `Add to ${mealLabels[destinationMeal]}`
+                          : "Choose a meal to add"}
                     </button>
                   </div>
                 </article>
@@ -765,7 +1027,30 @@ export function FoodSearchPicker({
             const isImported = importedKeys.has(key);
             const usesUnsupportedBasis =
               candidate.nutritionReferenceUnit !== "g";
-            const destination = destinations[result.key] ?? "breakfast";
+            const storedCandidateFailure = candidateFailures[key];
+            const providerCooldown = providerCooldowns[candidate.provider];
+            const candidateFailure =
+              storedCandidateFailure?.waitsForCooldown &&
+              (providerCooldown?.remainingSeconds ?? 0) <= 0
+                ? undefined
+                : storedCandidateFailure;
+            const cooldownSeconds = Math.max(
+              0,
+              providerCooldown?.remainingSeconds ?? 0,
+            );
+            const isCoolingDown = cooldownSeconds > 0;
+            const contextualError = candidateFailure?.error ?? null;
+            const candidateErrorAction =
+              contextualError?.action?.kind === "retry" && candidateFailure
+                ? candidateFailure.retryKind === "catalog" &&
+                  candidateFailure.refreshQuery
+                  ? () =>
+                      void retryCandidateCatalog(
+                        key,
+                        candidateFailure.refreshQuery!,
+                      )
+                  : () => void importCandidate(candidate)
+                : undefined;
             const sourcePhotos = [
               candidate.imageUrl
                 ? {
@@ -802,6 +1087,17 @@ export function FoodSearchPicker({
                   {candidate.dataType ? (
                     <p className={styles.secondaryText}>{candidate.dataType}</p>
                   ) : null}
+                  <p className={styles.sourceIdentity}>
+                    {[
+                      candidatePackageDescription(candidate)
+                        ? `Package ${candidatePackageDescription(candidate)}`
+                        : null,
+                      candidate.gtin ? `Package code ${candidate.gtin}` : null,
+                      `${providerLabel(candidate.provider)} record ${candidate.externalId}`,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </p>
                   <p className={styles.nutritionPreview}>
                     <strong>
                       {candidate.nutritionReferenceUnit === "g"
@@ -817,14 +1113,27 @@ export function FoodSearchPicker({
                       ? candidate.nutritionReferenceUnit === "ml"
                         ? "Preview only. This liquid is reported per 100 mL and cannot enter gram-based plan math safely. Use the package-label workflow below only when the label gives a serving weight in grams."
                         : "Preview only. The source does not say whether these values are per 100 g or per 100 mL, so the record cannot enter plan math safely. Choose another result or use a label with a serving weight in grams."
-                      : `Preview only; values come from ${providerLabel(candidate.provider)} and are refetched before import.`}
+                      : `Preview only; values come from ${providerLabel(candidate.provider)} and are refetched before the record is saved for review.`}
                   </p>
                 </div>
                 <div className={styles.importControls}>
+                  {contextualError ? (
+                    <ApiErrorNotice
+                      actionDisabled={isImporting || isCoolingDown}
+                      className={styles.candidateApiError}
+                      error={contextualError}
+                      heading={`Could not save ${candidate.displayName}`}
+                      onAction={candidateErrorAction}
+                      ref={(node) => {
+                        if (node) candidateErrorRefs.current.set(key, node);
+                        else candidateErrorRefs.current.delete(key);
+                      }}
+                    />
+                  ) : null}
                   {usesUnsupportedBasis ? (
                     <>
                       <p>
-                        Import unavailable: this source does not provide a
+                        Catalog save unavailable: this source does not provide a
                         supported, unambiguous 100 g nutrition reference.
                       </p>
                       <button
@@ -833,43 +1142,40 @@ export function FoodSearchPicker({
                         disabled
                         aria-label={`Nutrition-basis import unavailable for ${candidate.displayName}`}
                       >
-                        Nutrition-basis import unavailable
+                        Nutrition-basis save unavailable
                       </button>
                     </>
                   ) : (
                     <>
-                      <label>
-                        <span>Use after review</span>
-                        <select
-                          aria-label={`Intended destination for ${candidate.displayName}`}
-                          value={destination}
-                          disabled={isImporting || isImported}
-                          onChange={(event) =>
-                            setDestinations((current) => ({
-                              ...current,
-                              [result.key]: event.target.value as Meal,
-                            }))
-                          }
-                        >
-                          {(Object.keys(mealLabels) as Meal[]).map((meal) => (
-                            <option value={meal} key={meal}>{mealLabels[meal]}</option>
-                          ))}
-                        </select>
-                      </label>
-                      <p>Import for source review first. It is not added to the selected meal until approved.</p>
+                      <p>
+                        Save this source-reported record for catalog review. It
+                        is not added to any meal. If approved,
+                        it will appear as a saved food you can add later.
+                      </p>
                       <button
                         className="button button-quiet"
                         type="button"
-                        disabled={Boolean(importingKey) || isImported}
-                        aria-label={`Import ${candidate.displayName} for ${mealLabels[destination]} review`}
-                        onClick={() => void importCandidate(candidate, destination)}
+                        disabled={Boolean(importingKey) || isImported || isCoolingDown}
+                        aria-label={
+                          isCoolingDown
+                            ? `Saving ${candidate.displayName} is temporarily unavailable`
+                            : `Save ${candidate.displayName} for catalog review`
+                        }
+                        onClick={() => void importCandidate(candidate)}
                       >
                         {isImporting
-                          ? "Importing…"
+                          ? "Saving…"
                           : isImported
-                            ? `Imported for ${mealLabels[destination]} review`
-                            : `Import for ${mealLabels[destination]} review`}
+                            ? "Saved for catalog review"
+                            : isCoolingDown
+                              ? `Wait ${formatCooldown(cooldownSeconds)}`
+                              : "Save for catalog review"}
                       </button>
+                      {isImported ? (
+                        <p className={styles.savedForReview} role="status">
+                          Saved for catalog review. It was not added to a meal.
+                        </p>
+                      ) : null}
                     </>
                   )}
                 </div>
@@ -886,6 +1192,27 @@ export function FoodSearchPicker({
             <div className={styles.emptyState}>
               <strong>No matching saved or source-reported food yet.</strong>
               <p>Try fewer words, check the spelling, or add the package label below.</p>
+            </div>
+          ) : null}
+          {rankedResults.length > INITIAL_RESULT_COUNT ? (
+            <div className={styles.showMoreRow}>
+              <button
+                aria-controls="food-search-result-list"
+                aria-expanded={visibleResults.length === rankedResults.length}
+                className="button button-quiet"
+                type="button"
+                onClick={() =>
+                  setVisibleResultCount((current) =>
+                    current < rankedResults.length
+                      ? rankedResults.length
+                      : INITIAL_RESULT_COUNT,
+                  )
+                }
+              >
+                {visibleResults.length < rankedResults.length
+                  ? `Show all ${rankedResults.length - visibleResults.length} remaining ${rankedResults.length - visibleResults.length === 1 ? "match" : "matches"}`
+                  : "Show fewer matches"}
+              </button>
             </div>
           ) : null}
         </div>
@@ -906,7 +1233,7 @@ export function FoodSearchPicker({
           </p>
           <FoodLabelUpload
             onCreated={async (_foodId, displayName) => {
-              onSearchChange(displayName);
+              changeSearch(displayName);
               return await catalogCallbackRef.current(displayName);
             }}
           />

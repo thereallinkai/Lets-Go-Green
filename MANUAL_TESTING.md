@@ -68,7 +68,7 @@ software directly on your computer.
 
     ```dotenv
     USDA_FDC_API_KEY=
-    FOOD_LOOKUP_USER_AGENT=LetsGoGreen/1.0.0-beta.4 (https://github.com/thereallinkai/Lets-Go-Green)
+    FOOD_LOOKUP_USER_AGENT=LetsGoGreen/1.0.0-beta.5 (https://github.com/thereallinkai/Lets-Go-Green)
     ```
 
     Restart `npm run dev:all` after changing environment values. Open Food Facts
@@ -276,14 +276,21 @@ resumable.
 
 - [ ] Typing filters saved foods immediately and is case-insensitive across
   generic names, categories, brands, exact product names, and variants.
-- [ ] Typing alone never requests an online provider. The explicit **Search**
-  action sends one normalized name query to USDA and Open Food Facts and reuses
-  the result during the visit.
+- [ ] Typing alone never requests an online provider. The explicit **Search all
+  sources** action sends the normalized name to USDA and Open Food Facts; a
+  completed result is reused while this Step 3 page remains open.
+- [ ] Select **Choose a meal…** before adding any ready food. Until Breakfast,
+  Lunch, or Dinner is explicitly selected, every Add action remains disabled;
+  one choice updates all ready-food actions and survives result reranking.
 - [ ] Generic foods and branded products are visibly distinguishable. A branded
   result shows its brand, product, and flavor or variant when those values exist.
-- [ ] Saved and source-reported candidates appear in one relevance-ranked list;
-  available provider photos animate into place without causing horizontal
-  overflow or shifting the controls.
+- [ ] Ready saved foods and source-reported candidates are clearly separated in
+  one relevance-ranked result area; available provider photos animate into
+  place without causing horizontal overflow or shifting the controls.
+- [ ] Search `asparagus`. A generic USDA asparagus result is represented ahead
+  of branded keyword matches, duplicate-looking source records are collapsed,
+  and genuinely distinct packages expose a useful package or identifier
+  distinction.
 - [ ] Catalog foods show category badges, verification/review state, and whether
   the record is eligible for generated plans.
 - [ ] Expanding **Nutrition facts** shows the stated basis and every available
@@ -291,11 +298,25 @@ resumable.
 - [ ] Source attribution and a source link appear when provided. The UI never
   labels USDA, Open Food Facts, or a user transcription as independently
   reviewed unless its stored status says so.
-- [ ] Every plan-eligible saved result has a clearly labeled Breakfast, Lunch,
-  or Dinner destination and can be added independently to each meal.
-- [ ] Every external candidate labels its intended meal **after review**;
-  importing names that meal but does not falsely claim the pending item was
-  added to the plan.
+- [ ] Every plan-eligible saved result uses the single selected meal destination
+  and can be added independently to Breakfast, Lunch, or Dinner.
+- [ ] External candidates have **Save for catalog review** rather than a meal
+  selector. The UI states before and after saving that review does not add the
+  candidate to any meal and points to the private confirmed-label path when an
+  immediately usable exact product is needed.
+- [ ] Only six ranked results are initially expanded. **Show all … remaining
+  matches** reveals the remaining unique results, and the announced
+  visible/total count agrees with the actual rendered cards after deduplication.
+- [ ] In a controlled response, let USDA succeed while Open Food Facts is
+  unavailable or limited. USDA matches remain usable, the affected source and
+  retry timing are named, and the partial response is not reused indefinitely.
+- [ ] In a controlled response, return `FOOD_IMPORT_RATE_LIMITED` after source
+  results are visible. The error stays inside the exact candidate card, names
+  the product, confirms that no catalog save occurred, preserves all results, and
+  disables only that provider's review actions until the visible cooldown ends.
+- [ ] Six distinct submitted searches do not consume the separate capacity
+  reserved for a subsequent reviewed-source import. A rejected attempt does not
+  extend its cooldown, and an HTTP 429 includes an accurate `Retry-After` value.
 - [ ] Adding the same food twice to one meal does not duplicate it.
 - [ ] Remove controls delete the correct item.
 - [ ] Up/down controls reorder an item and correctly disable at the first/last
@@ -314,6 +335,11 @@ resumable.
   Add-to-preference controls are disabled until review.
 - [ ] A confirmed Account A personal-label product is selectable by Account A
   and remains labeled **Confirmed from your label**, not source reviewed.
+- [ ] At 320 px and 375 px wide, populated results, provider photos, a partial
+  provider notice, and a card-scoped error have no horizontal overflow or
+  nested results scroll trap. Keyboard focus reaches **Show all … remaining
+  matches**, package-label fallback, meal lists, and **Continue** in a
+  predictable order.
 
 For an ordinary balanced path, choose at least:
 
@@ -465,10 +491,10 @@ source-reported data, not proof that the nutrition is correct.
 - [ ] If the saved-food refresh fails before an import, the app reports
   `SAVED_FOOD_SEARCH_FAILED`, keeps the current results visible, and retries only
   the saved-food search.
-- [ ] If an external import succeeds but the following catalog refresh fails,
+- [ ] If an external catalog save succeeds but the following catalog refresh fails,
   the app reports `FOOD_IMPORT_REFRESH_FAILED`, says the pending-review record
-  was already imported and was not added to the intended meal, and retries only
-  the refresh. It does not repeat the provider import or create a duplicate.
+  was already saved and was not added to a meal, and retries only the refresh.
+  It does not repeat the provider import or create a duplicate.
 - [ ] A missing key in production, provider timeout, bad response, or rate limit
   produces a useful unavailable/retry message and does not invent a result.
 - [ ] Imported nutrition and provenance are labeled source-reported and

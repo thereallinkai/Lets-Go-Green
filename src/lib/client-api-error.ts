@@ -32,6 +32,13 @@ function safeAction(value: unknown): ApiErrorAction | undefined {
   return href ? { kind, label, href } : { kind, label };
 }
 
+function safeRetryAfterSeconds(value: unknown) {
+  const seconds = typeof value === "number" ? value : Number.NaN;
+  return Number.isFinite(seconds) && seconds > 0
+    ? Math.min(86_400, Math.ceil(seconds))
+    : undefined;
+}
+
 /**
  * Reads only the app's documented public error envelope. Unknown or malformed
  * responses become the caller-provided safe fallback instead of exposing raw
@@ -59,6 +66,9 @@ export function apiErrorFromPayload(
     typeof candidate.retryable === "boolean"
       ? candidate.retryable
       : undefined;
+  const retryAfterSeconds = safeRetryAfterSeconds(
+    candidate.retryAfterSeconds,
+  );
 
   return {
     code,
@@ -66,6 +76,7 @@ export function apiErrorFromPayload(
     ...(details ? { details } : {}),
     ...(action ? { action } : {}),
     ...(retryable === undefined ? {} : { retryable }),
+    ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),
   };
 }
 
@@ -88,7 +99,10 @@ export function clientApiError(
   code: string,
   message: string,
   details: string,
-  options: Pick<ApiError, "action" | "retryable"> = {},
+  options: Pick<
+    ApiError,
+    "action" | "retryable" | "retryAfterSeconds"
+  > = {},
 ): ApiError {
   return { code, message, details, ...options };
 }

@@ -13,18 +13,41 @@ describe("application release metadata", () => {
       packages?: Record<string, { version?: string }>;
     };
 
-    expect(APP_RELEASE.version).toBe("1.0.0-beta.4");
+    expect(APP_RELEASE.version).toBe("1.0.0-beta.5");
     expect(APP_RELEASE.version).toBe(packageManifest.version);
     expect(lockfile.version).toBe(packageManifest.version);
     expect(lockfile.packages?.[""]?.version).toBe(packageManifest.version);
   });
 
-  it("presents the current prerelease as Beta 4", () => {
+  it("keeps the Beta 5 documentation and provider identity synchronized", () => {
+    const files = Object.fromEntries(
+      ["README.md", "VERSIONING.md", "CHANGELOG.md", ".env.example", "src/lib/env.ts"].map(
+        (path) => [path, readFileSync(resolve(process.cwd(), path), "utf8")],
+      ),
+    );
+
+    expect(files["README.md"]).toContain("Let's Go Green! 1.0 Beta 5");
+    expect(files["VERSIONING.md"]).toContain(
+      "Let's Go Green! 1.0 Beta 5",
+    );
+    expect(files["CHANGELOG.md"]).toContain(
+      "## 1.0.0-beta.5 — 2026-08-13",
+    );
+    expect(files[".env.example"]).toContain(
+      "FOOD_LOOKUP_USER_AGENT=LetsGoGreen/1.0.0-beta.5",
+    );
+    expect(files["src/lib/env.ts"]).toContain(
+      '"LetsGoGreen/1.0.0-beta.5',
+    );
+    expect(packageManifest.overrides["fast-uri"]).toBe("4.1.2");
+  });
+
+  it("presents the current prerelease as Beta 5", () => {
     expect(APP_RELEASE).toMatchObject({
       channel: "beta",
-      channelLabel: "Beta 4",
-      displayLabel: "Beta 4 · v1.0.0-beta.4",
-      displayVersion: "v1.0.0-beta.4",
+      channelLabel: "Beta 5",
+      displayLabel: "Beta 5 · v1.0.0-beta.5",
+      displayVersion: "v1.0.0-beta.5",
       isPrerelease: true,
     });
   });

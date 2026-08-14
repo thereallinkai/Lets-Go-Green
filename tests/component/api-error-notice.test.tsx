@@ -54,6 +54,25 @@ describe("ApiErrorNotice", () => {
       "/login",
     );
   });
+
+  it("does not claim that an immediate retry is available during a cooldown", () => {
+    render(
+      <ApiErrorNotice
+        error={{
+          code: "FOOD_IMPORT_RATE_LIMITED",
+          message: "Wait before trying this import again.",
+          retryable: true,
+          action: { kind: "wait", label: "Wait 2 minutes, then try again" },
+        }}
+      />,
+    );
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(
+      "Retry available: after the waiting period",
+    );
+    expect(alert).not.toHaveTextContent("Retry available: yes");
+  });
 });
 
 describe("apiErrorFromPayload", () => {
@@ -70,6 +89,7 @@ describe("apiErrorFromPayload", () => {
           message: "The email or password was not accepted.",
           details: "Check both fields.",
           retryable: false,
+          retryAfterSeconds: 19.2,
           action: {
             kind: "navigate",
             label: "Reset password",
@@ -83,6 +103,7 @@ describe("apiErrorFromPayload", () => {
     expect(result).toMatchObject({
       code: "INVALID_CREDENTIALS",
       retryable: false,
+      retryAfterSeconds: 20,
       action: { kind: "navigate", label: "Reset password" },
     });
     expect(result.action).not.toHaveProperty("href");

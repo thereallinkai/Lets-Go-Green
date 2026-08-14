@@ -21,7 +21,9 @@ export const ApiErrorNotice = forwardRef<
 ) {
   const action = error.action;
   const retryLabel =
-    error.retryable === true
+    error.action?.kind === "wait"
+      ? "Retry available: after the waiting period"
+      : error.retryable === true
       ? "Retry available: yes"
       : error.retryable === false
         ? "Retry available: not until the issue is resolved"

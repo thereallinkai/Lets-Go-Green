@@ -1,6 +1,6 @@
 {
   "name": "lets-go-green",
-  "version": "1.0.0-beta.4",
+  "version": "1.0.0-beta.5",
   "private": true,
   "description": "Let's Go Green! is a calm, safety-aware meal planning and habit tracking application.",
   "license": "UNLICENSED",
@@ -96,7 +96,7 @@
   "overrides": {
     "brace-expansion": "5.0.9",
     "next": "16.2.11",
-    "fast-uri": "4.1.1",
+    "fast-uri": "4.1.2",
     "js-yaml": "5.2.2",
     "nanoid": "3.3.18",
     "postcss": "8.5.23",

@@ -181,7 +181,10 @@ describe("external food lookup route", () => {
     routeState.loadUsdaFood.mockReset();
     routeState.rpc.mockImplementation(async (name: string) => {
       if (name === "record_external_food_lookup") {
-        return { data: true, error: null };
+        return {
+          data: { allowed: true, retryAfterSeconds: 0 },
+          error: null,
+        };
       }
       if (name === "cache_external_food") {
         return {
@@ -247,6 +250,7 @@ describe("external food lookup route", () => {
     expect(body.data).toMatchObject({
       kind: "candidates",
       candidates: [usdaCandidate],
+      cacheable: false,
       providers: expect.arrayContaining([
         expect.objectContaining({
           provider: "usda_fdc",
@@ -279,11 +283,17 @@ describe("external food lookup route", () => {
     );
     expect(routeState.rpc).toHaveBeenCalledWith(
       "record_external_food_lookup",
-      expect.objectContaining({ lookup_provider: "usda_fdc" }),
+      expect.objectContaining({
+        lookup_provider: "usda_fdc",
+        lookup_kind: "search",
+      }),
     );
     expect(routeState.rpc).toHaveBeenCalledWith(
       "record_external_food_lookup",
-      expect.objectContaining({ lookup_provider: "open_food_facts" }),
+      expect.objectContaining({
+        lookup_provider: "open_food_facts",
+        lookup_kind: "search",
+      }),
     );
   });
 
@@ -315,13 +325,19 @@ describe("external food lookup route", () => {
     );
     expect(routeState.rpc).toHaveBeenCalledWith(
       "record_external_food_lookup",
-      expect.objectContaining({ lookup_provider: "open_food_facts" }),
+      expect.objectContaining({
+        lookup_provider: "open_food_facts",
+        lookup_kind: "search",
+      }),
     );
     expect(routeState.loadOpenFoodFactsProduct).not.toHaveBeenCalled();
   });
 
   it("stops name search when server-side lookup accounting rejects the request", async () => {
-    routeState.rpc.mockResolvedValueOnce({ data: false, error: null });
+    routeState.rpc.mockResolvedValueOnce({
+      data: { allowed: false, retryAfterSeconds: 83 },
+      error: null,
+    });
 
     const response = await POST(
       new Request("http://localhost/api/foods/lookup", {
@@ -336,12 +352,157 @@ describe("external food lookup route", () => {
     const body = await response.json();
 
     expect(response.status).toBe(429);
-    expect(body.error.code).toBe("FOOD_LOOKUP_RATE_LIMITED");
+    expect(response.headers.get("Retry-After")).toBe("83");
+    expect(body.error).toMatchObject({
+      code: "FOOD_SEARCH_RATE_LIMITED",
+      retryAfterSeconds: 83,
+      message: "Search this source again in 83 seconds.",
+    });
     expect(body.error.action).toEqual({
       kind: "wait",
       label: "Wait, then try again",
     });
     expect(routeState.searchOpenFoodFactsProducts).not.toHaveBeenCalled();
+  });
+
+  it("reserves import capacity separately and identifies import cooldowns precisely", async () => {
+    routeState.rpc.mockResolvedValueOnce({
+      data: { allowed: false, retryAfterSeconds: 19 },
+      error: null,
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/foods/lookup", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "import",
+          provider: "open_food_facts",
+          externalId: "748927022650",
+        }),
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("19");
+    expect(body.error).toMatchObject({
+      code: "FOOD_IMPORT_RATE_LIMITED",
+      retryAfterSeconds: 19,
+      message: "This food can be imported in 19 seconds.",
+    });
+    expect(routeState.rpc).toHaveBeenCalledWith(
+      "record_external_food_lookup",
+      expect.objectContaining({ lookup_kind: "import" }),
+    );
+    expect(routeState.loadOpenFoodFactsProduct).not.toHaveBeenCalled();
+  });
+
+  it("uses a conservative structured delay when the provider itself returns a rate limit", async () => {
+    routeState.loadOpenFoodFactsProduct.mockRejectedValue(
+      new ExternalFoodError(
+        "rate_limited",
+        "unsafe provider diagnostic with internal_table_name",
+      ),
+    );
+
+    const response = await POST(
+      new Request("http://localhost/api/foods/lookup", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "import",
+          provider: "open_food_facts",
+          externalId: "748927022650",
+        }),
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("300");
+    expect(body.error).toMatchObject({
+      code: "FOOD_SOURCE_RATE_LIMITED",
+      retryAfterSeconds: 300,
+    });
+    expect(JSON.stringify(body)).not.toContain("internal_table_name");
+  });
+
+  it("uses a search-specific safe envelope for an unexpected direct search failure", async () => {
+    routeState.searchOpenFoodFactsProducts.mockRejectedValue(
+      new Error("unsafe upstream diagnostic"),
+    );
+
+    const response = await POST(
+      new Request("http://localhost/api/foods/lookup", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "search_open_food_facts",
+          query: "asparagus",
+        }),
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(body.error).toMatchObject({
+      code: "FOOD_SEARCH_FAILED",
+      action: { kind: "retry", label: "Retry food search" },
+    });
+    expect(JSON.stringify(body)).not.toContain("unsafe upstream diagnostic");
+    expect(JSON.stringify(body)).not.toContain("Retry import");
+  });
+
+  it("keeps combined partial results usable but marks a limited provider response non-cacheable", async () => {
+    routeState.rpc.mockImplementation(
+      async (name: string, args: { lookup_provider?: string }) => {
+        if (name !== "record_external_food_lookup") {
+          return { data: null, error: { code: "unexpected_rpc" } };
+        }
+        return args.lookup_provider === "usda_fdc"
+          ? {
+              data: { allowed: false, retryAfterSeconds: 41 },
+              error: null,
+            }
+          : {
+              data: { allowed: true, retryAfterSeconds: 0 },
+              error: null,
+            };
+      },
+    );
+    routeState.searchOpenFoodFactsProducts.mockResolvedValue([offCandidate]);
+
+    const response = await POST(
+      new Request("http://localhost/api/foods/lookup", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "search", query: "asparagus" }),
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Retry-After")).toBeNull();
+    expect(body.data).toMatchObject({
+      kind: "candidates",
+      candidates: [offCandidate],
+      cacheable: false,
+      providers: expect.arrayContaining([
+        expect.objectContaining({
+          provider: "usda_fdc",
+          status: "rate_limited",
+          retryAfterSeconds: 41,
+        }),
+        expect.objectContaining({
+          provider: "open_food_facts",
+          status: "ok",
+          retryAfterSeconds: null,
+        }),
+      ]),
+    });
+    expect(routeState.searchUsdaFoods).not.toHaveBeenCalled();
+    expect(routeState.searchOpenFoodFactsProducts).toHaveBeenCalledOnce();
   });
 
   it("returns a stable safe reason when a source record lacks required nutrition", async () => {
@@ -434,6 +595,13 @@ describe("external food lookup route", () => {
       }),
     );
     expect(routeState.rpc).toHaveBeenCalledWith(
+      "record_external_food_lookup",
+      expect.objectContaining({
+        lookup_provider: "open_food_facts",
+        lookup_kind: "import",
+      }),
+    );
+    expect(routeState.rpc).toHaveBeenCalledWith(
       "cache_external_food",
       expect.objectContaining({
         source_provider: "open_food_facts",
@@ -446,5 +614,36 @@ describe("external food lookup route", () => {
       reviewStatus: "pending_review",
       planEligible: false,
     });
+  });
+
+  it("describes an unknown import result as safely retryable and idempotent", async () => {
+    routeState.loadOpenFoodFactsProduct.mockResolvedValue(normalizedOffFood);
+    routeState.rpc.mockImplementation(async (name: string) => {
+      if (name === "record_external_food_lookup") {
+        return { data: { allowed: true, retryAfterSeconds: 0 }, error: null };
+      }
+      throw new Error("lost cache response");
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/foods/lookup", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "import",
+          provider: "open_food_facts",
+          externalId: "748927022650",
+        }),
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body.error).toMatchObject({
+      code: "FOOD_IMPORT_FAILED",
+      message: "The catalog save result could not be confirmed.",
+      action: { kind: "retry", label: "Retry catalog save" },
+    });
+    expect(body.error.details).toMatch(/idempotent provider save may already exist/i);
   });
 });

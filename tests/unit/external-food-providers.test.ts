@@ -6,9 +6,11 @@ import usdaFixture from "../fixtures/usda-whey-product.json";
 vi.mock("server-only", () => ({}));
 
 import {
+  inferCategorySlugs,
   loadOpenFoodFactsProduct,
   loadUsdaFood,
   searchOpenFoodFactsProducts,
+  searchUsdaFoods,
 } from "../../src/lib/external";
 
 function fixtureFetch(payload: unknown) {
@@ -21,6 +23,167 @@ function fixtureFetch(payload: unknown) {
 }
 
 describe("external food normalization", () => {
+  it("searches balanced USDA data types and ranks a generic exact food first", async () => {
+    const nutrients = (calories: number) => [
+      { nutrientNumber: "1008", nutrientName: "Energy", unitName: "kcal", value: calories },
+      { nutrientNumber: "1003", nutrientName: "Protein", unitName: "g", value: 2.2 },
+      {
+        nutrientNumber: "1005",
+        nutrientName: "Carbohydrate, by difference",
+        unitName: "g",
+        value: 3.9,
+      },
+      {
+        nutrientNumber: "1004",
+        nutrientName: "Total lipid (fat)",
+        unitName: "g",
+        value: 0.1,
+      },
+    ];
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const requestUrl = new URL(String(input));
+      const dataType = requestUrl.searchParams.get("dataType");
+      const foods =
+        dataType === "Branded"
+          ? [
+              {
+                fdcId: 5001,
+                description: "ASPARAGUS",
+                dataType: "Branded",
+                brandName: "WEGMANS",
+                gtinUpc: "12345678901",
+                packageWeight: "12 oz",
+                publishedDate: "2023-01-01",
+                foodNutrients: nutrients(18),
+              },
+              {
+                fdcId: 5002,
+                description: "ASPARAGUS",
+                dataType: "Branded",
+                brandName: "WEGMANS",
+                gtinUpc: "123456789012",
+                packageWeight: "12 oz",
+                publishedDate: "2025-01-01",
+                foodNutrients: nutrients(18),
+              },
+              {
+                fdcId: 5003,
+                description: "ASPARAGUS CUTS",
+                dataType: "Branded",
+                brandName: "DEL MONTE",
+                gtinUpc: "748927028669",
+                packageWeight: "14.5 oz",
+                publishedDate: "2024-06-01",
+                foodNutrients: nutrients(22),
+              },
+            ]
+          : [
+              {
+                fdcId: 168389,
+                description: "Asparagus, raw",
+                dataType: "SR Legacy",
+                foodNutrients: nutrients(20),
+              },
+              {
+                fdcId: 2710830,
+                description: "Asparagus",
+                dataType: "Foundation",
+                foodNutrients: nutrients(21),
+              },
+            ];
+      return new Response(JSON.stringify({ foods }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const candidates = await searchUsdaFoods("asparagus", {
+      apiKey: "fixture-key",
+      userAgent: "LetsGoGreen tests@example.invalid",
+      fetcher,
+    });
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    const requestedUrls = vi.mocked(fetcher).mock.calls.map(
+      ([input]) => new URL(String(input)),
+    );
+    expect(requestedUrls.map((url) => url.searchParams.get("dataType"))).toEqual(
+      expect.arrayContaining(["Foundation,SR Legacy", "Branded"]),
+    );
+    expect(
+      requestedUrls.every((url) => url.searchParams.get("pageSize") === "15"),
+    ).toBe(true);
+    expect(candidates[0]).toMatchObject({
+      externalId: "2710830",
+      productName: "Asparagus",
+      brandName: null,
+      dataType: "Foundation",
+    });
+    expect(candidates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ externalId: "168389" }),
+        expect.objectContaining({
+          externalId: "5002",
+          gtin: "123456789012",
+          packageDescription: "12 oz",
+          sourceVersion: "2025-01-01",
+        }),
+      ]),
+    );
+    expect(
+      candidates.filter((candidate) => candidate.brandName === "WEGMANS"),
+    ).toHaveLength(1);
+  });
+
+  it("deduplicates visibly identical products without changing provider identifiers", async () => {
+    const coreProduct = {
+      product_name: "Asparagus snack",
+      brands: "Example Foods",
+      quantity: "100 g",
+      nutriments: {
+        "energy-kcal_100g": 100,
+        proteins_100g: 2,
+        carbohydrates_100g: 18,
+        fat_100g: 2,
+      },
+    };
+    const candidates = await searchOpenFoodFactsProducts("asparagus snack", {
+      userAgent: "LetsGoGreen tests@example.invalid",
+      fetcher: fixtureFetch({
+        products: [
+          { ...coreProduct, code: "12345678901" },
+          { ...coreProduct, code: "123456789012" },
+        ],
+      }),
+    });
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({
+      externalId: "12345678901",
+      gtin: "12345678901",
+      packageDescription: "100 g",
+    });
+
+    const fetcher = fixtureFetch({
+      product: { ...coreProduct, code: "12345678901" },
+    });
+    const imported = await loadOpenFoodFactsProduct("12345678901", {
+      userAgent: "LetsGoGreen tests@example.invalid",
+      fetcher,
+    });
+    expect(String(vi.mocked(fetcher).mock.calls[0]?.[0])).toContain(
+      "/api/v3/product/12345678901",
+    );
+    expect(imported.externalId).toBe("12345678901");
+    expect(imported.food.gtin).toBe("12345678901");
+  });
+
+  it("classifies common vegetable names without changing nutrition", () => {
+    expect(
+      inferCategorySlugs("Asparagus, kale, cauliflower and green beans"),
+    ).toContain("vegetable");
+  });
+
   it("normalizes an exact branded USDA whey product with full provenance", async () => {
     const result = await loadUsdaFood("2464134", {
       apiKey: "fixture-key",

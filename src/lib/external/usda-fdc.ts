@@ -84,6 +84,139 @@ function nutrientPreview(food: UnknownRecord) {
   };
 }
 
+function normalizedSearchText(value: string) {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("en-US")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function candidateFromSearchFood(raw: unknown): ExternalFoodCandidate | null {
+  const food = record(raw);
+  const externalId = String(food.fdcId ?? "");
+  const productName = text(food.description);
+  if (!/^\d+$/.test(externalId) || !productName) return null;
+  const brandName = text(food.brandName ?? food.brandOwner);
+  return {
+    provider: "usda_fdc",
+    externalId,
+    displayName: brandName ? `${brandName} — ${productName}` : productName,
+    brandName,
+    productName,
+    variantName: null,
+    gtin: digitsOnly(food.gtinUpc),
+    dataType: text(food.dataType),
+    packageDescription: text(food.packageWeight),
+    sourceVersion: text(food.publishedDate ?? food.publicationDate),
+    imageUrl: null,
+    nutritionImageUrl: null,
+    nutritionReferenceUnit: "g",
+    nutritionPreview: nutrientPreview(food),
+  };
+}
+
+function nutritionCompleteness(candidate: ExternalFoodCandidate) {
+  return Object.values(candidate.nutritionPreview).filter(
+    (value) => value !== null,
+  ).length;
+}
+
+function candidateScore(candidate: ExternalFoodCandidate, query: string) {
+  const normalizedQuery = normalizedSearchText(query);
+  const product = normalizedSearchText(candidate.productName);
+  const searchableName = normalizedSearchText(candidate.displayName);
+  const queryTokens = new Set(normalizedQuery.split(" ").filter(Boolean));
+  const productTokens = new Set(searchableName.split(" ").filter(Boolean));
+  const matchingTokens = [...queryTokens].filter((token) =>
+    productTokens.has(token),
+  ).length;
+  const isGeneric = candidate.brandName === null;
+  const firstDescriptionPart = normalizedSearchText(
+    candidate.productName.split(",")[0] ?? candidate.productName,
+  );
+
+  let score = matchingTokens * 20 + nutritionCompleteness(candidate) * 3;
+  if (searchableName === normalizedQuery) score += 120;
+  else if (searchableName.startsWith(`${normalizedQuery} `)) score += 70;
+  if (product === normalizedQuery) score += 100;
+  else if (firstDescriptionPart === normalizedQuery) score += 90;
+  else if (product.startsWith(`${normalizedQuery} `)) score += 55;
+  else if (product.includes(normalizedQuery)) score += 35;
+  if (isGeneric) score += 60;
+  if (candidate.dataType === "Foundation") score += 12;
+  else if (candidate.dataType === "SR Legacy") score += 8;
+  return score;
+}
+
+function candidateVersion(candidate: ExternalFoodCandidate) {
+  const version = candidate.sourceVersion;
+  const timestamp = version
+    ? Date.parse(
+        /^\d{4}-\d{2}-\d{2}$/.test(version)
+          ? `${version}T00:00:00.000Z`
+          : version,
+      )
+    : Number.NaN;
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function nutritionIdentity(candidate: ExternalFoodCandidate) {
+  return Object.values(candidate.nutritionPreview)
+    .map((value) => (value === null ? "?" : String(Math.round(value * 1_000))))
+    .join(":");
+}
+
+function candidateIdentity(candidate: ExternalFoodCandidate) {
+  return [
+    normalizedSearchText(candidate.brandName ?? "generic"),
+    normalizedSearchText(candidate.productName),
+    normalizedSearchText(candidate.packageDescription ?? ""),
+    nutritionIdentity(candidate),
+  ].join("|");
+}
+
+function dedupeCandidates(candidates: ExternalFoodCandidate[]) {
+  const byIdentity = new Map<string, ExternalFoodCandidate>();
+  for (const candidate of candidates) {
+    const identity = candidateIdentity(candidate);
+    const previous = byIdentity.get(identity);
+    if (
+      !previous ||
+      candidateVersion(candidate) > candidateVersion(previous) ||
+      (candidateVersion(candidate) === candidateVersion(previous) &&
+        nutritionCompleteness(candidate) > nutritionCompleteness(previous))
+    ) {
+      byIdentity.set(identity, candidate);
+    }
+  }
+  return [...byIdentity.values()];
+}
+
+async function searchUsdaDataTypes(
+  query: string,
+  dataType: string,
+  options: {
+    apiKey: string;
+    userAgent: string;
+    fetcher?: typeof fetch;
+  },
+) {
+  const url = new URL("https://api.nal.usda.gov/fdc/v1/foods/search");
+  url.searchParams.set("api_key", options.apiKey);
+  url.searchParams.set("query", query);
+  url.searchParams.set("pageSize", "15");
+  url.searchParams.set("dataType", dataType);
+  const payload = await fetchProviderJson(url, options);
+  const foods = Array.isArray(payload.foods) ? payload.foods : [];
+  return foods.flatMap((raw) => {
+    const candidate = candidateFromSearchFood(raw);
+    return candidate ? [candidate] : [];
+  });
+}
+
 function ensureCoreNutrition(
   calories: number | null,
   protein: number | null,
@@ -112,38 +245,21 @@ export async function searchUsdaFoods(
     fetcher?: typeof fetch;
   },
 ): Promise<ExternalFoodCandidate[]> {
-  const url = new URL("https://api.nal.usda.gov/fdc/v1/foods/search");
-  url.searchParams.set("api_key", options.apiKey);
-  url.searchParams.set("query", query);
-  url.searchParams.set("pageSize", "10");
-  url.searchParams.set("dataType", "Foundation,SR Legacy,Branded");
-  const payload = await fetchProviderJson(url, options);
-  const foods = Array.isArray(payload.foods) ? payload.foods : [];
-  return foods.flatMap((raw): ExternalFoodCandidate[] => {
-    const food = record(raw);
-    const externalId = String(food.fdcId ?? "");
-    const productName = text(food.description);
-    if (!/^\d+$/.test(externalId) || !productName) return [];
-    const brandName = text(food.brandName ?? food.brandOwner);
-    return [
-      {
-        provider: "usda_fdc",
-        externalId,
-        displayName: brandName
-          ? `${brandName} — ${productName}`
-          : productName,
-        brandName,
-        productName,
-        variantName: null,
-        gtin: digitsOnly(food.gtinUpc),
-        dataType: text(food.dataType),
-        imageUrl: null,
-        nutritionImageUrl: null,
-        nutritionReferenceUnit: "g",
-        nutritionPreview: nutrientPreview(food),
-      },
-    ];
-  });
+  // USDA relevance can fill a mixed request with branded records before a
+  // canonical generic food appears. Keep the two documented data-type groups
+  // separate, then return a small balanced set for comparison.
+  const [genericFoods, brandedFoods] = await Promise.all([
+    searchUsdaDataTypes(query, "Foundation,SR Legacy", options),
+    searchUsdaDataTypes(query, "Branded", options),
+  ]);
+  const byScore = (left: ExternalFoodCandidate, right: ExternalFoodCandidate) =>
+    candidateScore(right, query) - candidateScore(left, query) ||
+    right.externalId.localeCompare(left.externalId, "en-US", {
+      numeric: true,
+    });
+  const generic = dedupeCandidates(genericFoods).sort(byScore).slice(0, 4);
+  const branded = dedupeCandidates(brandedFoods).sort(byScore).slice(0, 6);
+  return dedupeCandidates([...generic, ...branded]).sort(byScore).slice(0, 10);
 }
 
 export async function loadUsdaFood(
