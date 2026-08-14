@@ -123,6 +123,15 @@ test("populated Step 3 keeps one explicit meal destination and a bounded result 
     await expect(showAll).toBeVisible();
     await showAll.click();
     await expect(results).toHaveCount(28);
+    const translucentResults = await results.evaluateAll((cards) =>
+      cards.filter(
+        (card) => Number.parseFloat(getComputedStyle(card).opacity) < 1,
+      ).length,
+    );
+    expect(
+      translucentResults,
+      "result entrance motion must preserve text contrast",
+    ).toBe(0);
 
     await destination.selectOption("lunch");
     await expect(
