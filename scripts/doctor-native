@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
+
+PASS_COUNT=0
+FAIL_COUNT=0
+WARN_COUNT=0
+
+pass() {
+  PASS_COUNT=$((PASS_COUNT + 1))
+  printf 'PASS  %s\n' "$*"
+}
+
+fail() {
+  FAIL_COUNT=$((FAIL_COUNT + 1))
+  printf 'FAIL  %s\n' "$*"
+}
+
+warn() {
+  WARN_COUNT=$((WARN_COUNT + 1))
+  printf 'WARN  %s\n' "$*"
+}
+
+printf "Let's Go Green! native-host doctor\n\n"
+
+if command -v node >/dev/null 2>&1; then
+  ACTUAL_NODE="$(node -p 'process.versions.node')"
+  if [[ "${ACTUAL_NODE%%.*}" == "22" ]]; then
+    pass "Node.js ${ACTUAL_NODE} satisfies the supported Node 22 line."
+    EXPECTED_NODE="$(tr -d '[:space:]' < .nvmrc)"
+    if [[ "$ACTUAL_NODE" != "$EXPECTED_NODE" ]]; then
+      warn "The reproducible CI version is ${EXPECTED_NODE}; run 'nvm install && nvm use' before a release check."
+    fi
+  else
+    fail "Node.js 22 is required; found ${ACTUAL_NODE}."
+  fi
+else
+  fail "Node.js is missing. Install the version recorded in .nvmrc."
+fi
+
+if command -v npm >/dev/null 2>&1; then
+  ACTUAL_NPM="$(npm --version)"
+  EXPECTED_NPM="$(node -p "require('./package.json').packageManager.replace(/^npm@/, '')" 2>/dev/null || true)"
+  if [[ -n "$EXPECTED_NPM" && "$ACTUAL_NPM" == "$EXPECTED_NPM" ]]; then
+    pass "npm ${ACTUAL_NPM} matches package.json."
+  else
+    fail "npm ${EXPECTED_NPM:-10.9.8} is required; found ${ACTUAL_NPM}."
+  fi
+else
+  fail "npm is missing."
+fi
+
+if [[ -x node_modules/.bin/next ]] \
+  && npm ls --depth=0 --json >/dev/null 2>&1 \
+  && node -e '
+    for (const packageName of [
+      "tesseract.js",
+      "tesseract.js-core",
+      "@tesseract.js-data/eng",
+    ]) require.resolve(`${packageName}/package.json`);
+  ' >/dev/null 2>&1; then
+  pass "Installed top-level packages match the exact project dependency contract."
+else
+  fail "Project dependencies are missing or stale. Run 'npm ci'."
+fi
+
+if command -v node >/dev/null 2>&1 \
+  && node scripts/prepare-ocr-assets.mjs --check >/dev/null 2>&1; then
+  pass "Private on-device label-reader assets match the pinned packages."
+else
+  fail "Private label-reader assets are missing or stale. Run 'npm run ocr:assets'."
+fi
+
+APP_HEALTH_URL="http://127.0.0.1:${PORT:-3000}/api/health"
+HEALTH_PAYLOAD=""
+if command -v curl >/dev/null 2>&1; then
+  HEALTH_PAYLOAD="$(
+    curl --connect-timeout 2 --max-time 5 --silent --show-error --fail \
+      "$APP_HEALTH_URL" 2>/dev/null || true
+  )"
+fi
+
+if [[ -z "$HEALTH_PAYLOAD" ]]; then
+  fail "The native application is not ready. Keep 'npm run dev:native' running in another terminal."
+elif command -v node >/dev/null 2>&1 \
+  && HEALTH_PAYLOAD="$HEALTH_PAYLOAD" node -e '
+  let payload;
+  try {
+    payload = JSON.parse(process.env.HEALTH_PAYLOAD ?? "");
+  } catch {
+    process.exit(1);
+  }
+  const data = payload?.data;
+  if (
+    data?.readiness !== "ready" ||
+    data?.database !== "not_configured" ||
+    data?.aiProvider !== "mock"
+  ) process.exit(1);
+'; then
+  pass "The isolated native demo is ready at ${APP_HEALTH_URL%/api/health}."
+else
+  fail "Port ${PORT:-3000} is not the isolated native demo. Stop the process using that port, then run 'npm run dev:native'."
+fi
+
+if [[ -x node_modules/.bin/playwright ]] \
+  && node --input-type=module -e \
+    "import fs from 'node:fs'; const module = await import('@playwright/test'); fs.accessSync(module.chromium.executablePath());" \
+    >/dev/null 2>&1; then
+  pass "Playwright and its matching Chromium browser are available."
+else
+  warn "Playwright Chromium is optional for browsing; install it with 'npx playwright install chromium' before browser tests."
+fi
+
+printf 'INFO  Docker and local Supabase are intentionally not checked in native demo mode.\n'
+printf '\nDoctor summary: %d passed, %d warning(s), %d failed.\n' \
+  "$PASS_COUNT" "$WARN_COUNT" "$FAIL_COUNT"
+
+if [[ "$FAIL_COUNT" -gt 0 ]]; then
+  exit 1
+fi

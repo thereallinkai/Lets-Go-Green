@@ -60,11 +60,11 @@ export async function DELETE(
       );
     }
     if (!itemResult.data) {
-      return apiError(
-        "MEAL_ITEM_NOT_FOUND",
-        "That recorded food was not found for this date.",
-        404,
-      );
+      return apiSuccess({
+        id,
+        localDate: date,
+        alreadyAbsent: true,
+      });
     }
     const checkinResult = await supabase
       .from("daily_meal_checkins")
@@ -98,11 +98,11 @@ export async function DELETE(
       );
     }
     if (!data) {
-      return apiError(
-        "MEAL_ITEM_NOT_FOUND",
-        "That recorded food was not found.",
-        404,
-      );
+      return apiSuccess({
+        id,
+        localDate: date,
+        alreadyAbsent: true,
+      });
     }
     return apiSuccess({ id: data });
   } catch {

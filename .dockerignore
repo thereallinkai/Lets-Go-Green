@@ -23,6 +23,7 @@ npm-debug.log*
 .vercel
 work
 outputs
+public/ocr-runtime
 
 supabase/.branches
 supabase/.temp

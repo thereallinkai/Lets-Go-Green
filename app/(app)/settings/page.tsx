@@ -55,6 +55,7 @@ const demoSettings: SettingsInitialData = {
     },
   ],
   privateLabelFoods: [],
+  activeLabelDrafts: [],
   aiProviderMode: "mock",
   loadError: null,
 };
@@ -74,6 +75,7 @@ export default async function SettingsPage() {
     goalResult,
     mealPreferencesResult,
     privateFoodsResult,
+    activeLabelDraftsResult,
   ] = await Promise.all([
     supabase
       .from("profiles")
@@ -120,6 +122,13 @@ export default async function SettingsPage() {
       .eq("owner_user_id", userId)
       .eq("ownership_type", "private")
       .order("created_at"),
+    supabase
+      .from("food_label_submissions")
+      .select("id,status,brand_name,product_name,variant_name,created_at")
+      .eq("user_id", userId)
+      .in("status", ["draft", "needs_changes"])
+      .order("created_at", { ascending: false })
+      .limit(50),
   ]);
 
   const preferenceFoodIds = [
@@ -149,6 +158,7 @@ export default async function SettingsPage() {
     goalResult.error ||
     mealPreferencesResult.error ||
     privateFoodsResult.error ||
+    activeLabelDraftsResult.error ||
     preferenceFoodsResult.error
       ? "Stored settings could not be loaded completely. Saving is disabled to avoid overwriting unknown values; reload the page or try again later."
       : null;
@@ -226,6 +236,20 @@ export default async function SettingsPage() {
             : null,
       };
     }),
+    activeLabelDrafts: (activeLabelDraftsResult.data ?? []).flatMap((draft) =>
+      draft.status === "draft" || draft.status === "needs_changes"
+        ? [
+            {
+              id: draft.id,
+              status: draft.status,
+              brandName: draft.brand_name,
+              productName: draft.product_name,
+              variantName: draft.variant_name,
+              createdAt: draft.created_at,
+            },
+          ]
+        : [],
+    ),
     aiProviderMode: getAIProviderMode(),
     loadError,
   };

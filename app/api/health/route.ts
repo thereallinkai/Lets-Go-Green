@@ -7,7 +7,7 @@ import {
 import { createSupabaseAdminClient } from "@/src/lib/supabase/admin";
 
 const EXPECTED_MIGRATION =
-  "20260813000000_reserve_external_food_import_capacity";
+  "20260814000000_append_meal_preferences";
 
 export async function GET() {
   let database: "reachable" | "unavailable" | "not_configured" = "not_configured";

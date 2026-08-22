@@ -8,8 +8,8 @@ The repository is a single full-stack TypeScript application built with Next.js 
 
 > **Wellness and safety:** Let's Go Green! provides general wellness information and is not medical advice. Individual needs can vary. Consult a qualified healthcare professional or registered dietitian when appropriate.
 
-The current testing build is **Let's Go Green! 1.0 Beta 5**
-(`1.0.0-beta.5`). See [VERSIONING.md](VERSIONING.md) for the release-number
+The current testing build is **Let's Go Green! 1.0 Beta 6**
+(`1.0.0-beta.6`). See [VERSIONING.md](VERSIONING.md) for the release-number
 policy and [CHANGELOG.md](CHANGELOG.md) for user-visible changes.
 
 ## Current feature set
@@ -32,15 +32,25 @@ The repository is structured to provide:
   generic USDA foods with branded USDA and Open Food Facts products, collapses
   duplicate-looking records, shows supplied product photos, and keeps imported
   provider records behind a clearly labeled catalog-review boundary.
-- Private, sanitized nutrition-label photo upload and exact manual confirmation
-  for a user-confirmed personal product; a separate opt-in can create one
-  reusable normalized pending-review record without sharing the photo or
-  account identity.
+- On-device package-label reading that can prefill explicitly recognized
+  identity, serving, nutrition, ingredient, and allergen text without sending
+  the photo to an OCR or AI provider. Every suggestion remains editable and
+  requires comparison with the package before the existing private,
+  server-re-encoded evidence flow can save it.
+- Editable Breakfast, Lunch, and Dinner preferences in Settings, with the same
+  rich saved-food discovery used during onboarding. Settings has explicit
+  empty/None choices for meals, allergy, restriction, dislike, and safety
+  context; onboarding has matching allergy, restriction, and safety choices.
+- A separate opt-in can create one reusable normalized pending-review label
+  record without sharing the photo or account identity.
 - Crash-recoverable private label-photo replacement with one-use preflight
   tokens, compare-and-swap finalization, and a private cleanup queue that
   rechecks references before object deletion.
 - Versioned seven-day plans with an accepted-plan boundary.
-- Six ordered daily spaces—breakfast, morning snack, lunch, afternoon snack, dinner, and evening snack—with extra-food recording and an explicit skipped state whose reason is optional.
+- Six ordered daily spaces—breakfast, morning snack, lunch, afternoon snack,
+  dinner, and evening snack—with food recording available in every space, a
+  compact accessible completion control, and an explicit skipped state whose
+  reason is optional.
 - A profile reached from the account avatar, automatic device-time-zone initialization without a location permission prompt, a replayable first-run tutorial, and clearly external nearby-shopping links.
 - A green responsive visual system with coordinated page, section, surface,
   stack, dialog, and interaction feedback that respects reduced-motion
@@ -58,13 +68,18 @@ The repository is structured to provide:
 - A server-only, explicit-opt-in OpenAI path that validates structured output before persistence.
 - Unit, component, database/RLS, end-to-end, responsive, and accessibility test surfaces.
 
-The local and CI paths do not require a hosted Supabase project, SMTP provider, OpenAI key, Vercel account, or production secret. See [Current limitations](#current-limitations) for the external configuration that remains intentionally separate.
+The credential-free native demo and container-backed CI paths do not require a
+hosted Supabase project, SMTP provider, OpenAI key, Vercel account, or
+production secret. Persistent native accounts use a separate hosted Supabase
+development project. See [Current limitations](#current-limitations) for the
+external configuration that remains intentionally separate.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
   B[Browser]
+  T[Browser OCR worker]
   N[Next.js App Router]
   D[Deterministic domain logic]
   S[Supabase API and Auth]
@@ -78,6 +93,7 @@ flowchart LR
   E[Local captured email]
 
   B -->|Pages, forms, same-origin API| N
+  B -->|On-device label reading; photo stays local| T
   N -->|Validated calculations| D
   N -->|User-scoped SSR client| S
   S -->|RLS-enforced queries| P
@@ -101,8 +117,11 @@ Deterministic code—not a language model—owns unit conversion, timeline math,
 | Reviewed local catalog | Generic foods or exact products, measurement basis, nutrition, safety metadata, and provenance | Eligible only when the required nutrition and safety records have the reviewed statuses enforced by the database |
 | USDA FoodData Central | Text-search candidates and a server-refetched normalized record | Labeled source-reported and `pending_review`; searchable and loggable, but not eligible for generated plans until reviewed |
 | Open Food Facts | Explicit brand/product/flavor name-search candidates and provider photos when available, followed by a server-refetched normalized product | Community-source data with attribution, labeled source-reported and `pending_review`; not eligible for generated plans until reviewed |
-| Uploaded package label | A server-re-encoded, owner-private JPEG/PNG plus the account owner's exact transcription | The original upload is not retained as-is; confirmation requires sanitized nutrition-label evidence and creates an active `user_label` personal product for that owner, not an independently reviewed record |
+| Uploaded package label | On-device OCR suggestions reviewed against the package, followed by a server-re-encoded owner-private JPEG/PNG and the account owner's confirmed facts | Recognition does not transmit the photo to an OCR or AI provider. The original upload is not retained as-is; confirmation requires sanitized nutrition-label evidence and creates an active `user_label` personal product for that owner, not an independently reviewed record |
 | Opt-in reusable label facts | One normalized catalog identity derived from exact product text and confirmed core nutrition | Created only after a separate sharing confirmation; reusable as `pending_review`, while the private photo, account identity, and owner-private product are never published to other accounts |
+
+The pinned browser-reader components and their redistributed license texts are
+documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Private photo replacement uses a unique reservation and database
 compare-and-swap before a new object becomes current. Interrupted, concurrent,
@@ -145,14 +164,88 @@ The initial time zone comes from the browser's standard device time-zone setting
 
 | Path | Host requirements | Intended use |
 | --- | --- | --- |
-| GitHub Codespaces | A browser and GitHub access | Primary zero-local-install development path |
-| VS Code Dev Container | Git, VS Code, Docker Desktop or a compatible Docker runtime, and the Dev Containers extension | Reproducible local fallback |
-| Bare host | Not supported | Do not install Node, PostgreSQL, Supabase CLI, or Playwright directly for this project |
+| Native macOS or Linux | Git, Node.js 22, and npm 10.9.8 | No-container UI, OCR, unit/component, build, and mock browser testing |
+| Native host + hosted Supabase | The native tools above and an isolated Supabase development project | Full accounts, database, storage, and hosted email testing without Docker |
+| GitHub Codespaces | A browser and GitHub access | Optional zero-local-install full-stack path |
+| VS Code Dev Container | Git, VS Code, a compatible Docker runtime, and the Dev Containers extension | Optional reproducible full-stack path |
 | Production | Authorized cloud accounts and securely configured runtime values | Separate deployment process; never the local Supabase stack |
 
 The Dev Container pins Node.js `22.23.1` and npm `10.9.8`, includes Git, GitHub CLI, Docker-in-Docker, the PostgreSQL client, browser system libraries, and recommended VS Code extensions. Supabase CLI and Playwright remain project-local lockfile dependencies.
 
 The recommended Codespaces machine has at least 4 CPU cores, 8 GB memory, and 32 GB storage because local Supabase runs several containers.
+
+## Native local start — no container and no Docker
+
+The repository itself is a normal local project. A Python virtual environment
+is neither used nor required. From the cloned project folder on macOS or Linux:
+
+```bash
+nvm install
+nvm use
+npm install --global npm@10.9.8
+npm ci
+npm run dev:native
+```
+
+Open `http://127.0.0.1:3000`. Keep that terminal running. In a second terminal,
+verify the native process with:
+
+```bash
+npm run doctor:native
+```
+
+The native doctor requires the health endpoint to report the isolated mock
+contract (`ready`, database `not_configured`, provider `mock`). It fails if a
+stale full-stack or real-provider process is already occupying the port.
+
+`dev:native` deliberately overrides any old local-Supabase values and starts a
+credential-free mock UI. It supports the complete visual system, navigation,
+on-device nutrition-label recognition, component state, production builds, and
+mock-backed browser tests. It does not pretend to persist accounts, email,
+uploads, or database writes: demo changes reset when the process restarts.
+
+For a native application-only release check, install the matching browser once
+and run:
+
+```bash
+npx playwright install chromium
+npm run verify:app
+```
+
+### Full native accounts without Docker
+
+Use an isolated hosted Supabase **development** project when real signup,
+database, private storage, and cross-user RLS testing are needed without a
+local container. Do not point local development or preview deployments at the
+production database.
+
+1. Create the development project and keep its URL, browser publishable/anon
+   key, server service-role key, and database connection string out of Git.
+2. Link the project, preview the migration plan, and apply the committed
+   migrations through the project-local CLI:
+
+   ```bash
+   npx supabase login
+   npx supabase link --project-ref YOUR_DEVELOPMENT_PROJECT_REF
+   npx supabase db push --dry-run
+   npx supabase db push --include-seed
+   ```
+
+   `--include-seed` is only for a fresh development or staging project. Never
+   seed production.
+3. Create ignored `.env.local` values for `NEXT_PUBLIC_APP_URL`,
+   `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
+   `SUPABASE_SERVICE_ROLE_KEY`, and `DATABASE_URL`; keep AI in mock mode unless
+   a paid provider test is explicitly intended.
+4. Add `http://127.0.0.1:3000/**` to the development project's Auth redirect
+   allow-list, then start with `npm run dev` rather than `dev:native`.
+
+Supabase documents the current
+[migration/link workflow](https://supabase.com/docs/guides/deployment/database-migrations),
+[local-to-hosted CLI workflow](https://supabase.com/docs/guides/local-development/cli-workflows),
+and [Auth redirect allow-list](https://supabase.com/docs/guides/auth/redirect-urls).
+Hosted test email is provider-limited; public registration requires reviewed
+[custom SMTP](https://supabase.com/docs/guides/auth/auth-smtp).
 
 ## Zero-local-install GitHub Codespaces
 
@@ -199,7 +292,8 @@ No host installation of Node.js, npm packages, PostgreSQL, Supabase CLI, or Play
 
 1. Confirms that it is running in the Linux Codespace, Dev Container, or CI environment.
 2. Verifies Node, npm, Docker, `psql`, and `curl`.
-3. runs `npm ci`;
+3. runs `npm ci` and prepares checksum-verified, same-origin OCR runtime assets
+   from the exact pinned packages;
 4. starts or reuses local Supabase and waits on an actual health endpoint;
 5. applies pending version-controlled migrations without resetting data;
 6. applies the deterministic, idempotent seed;
@@ -241,7 +335,7 @@ Exact-product lookup runs on the server. Add these values to the ignored `.env.l
 USDA_FDC_API_KEY=
 
 # Descriptive application identity sent to food-data providers.
-FOOD_LOOKUP_USER_AGENT=LetsGoGreen/1.0.0-beta.5 (https://github.com/thereallinkai/Lets-Go-Green)
+FOOD_LOOKUP_USER_AGENT=LetsGoGreen/1.0.0-beta.6 (https://github.com/thereallinkai/Lets-Go-Green)
 ```
 
 - `USDA_FDC_API_KEY` is optional for local development because non-production mode can use the USDA `DEMO_KEY`. That shared key is rate-limited and is not a production configuration. Obtain and secure a data.gov key before relying on USDA lookup in a deployed environment.
@@ -289,17 +383,23 @@ A key alone never enables paid calls. The real adapter uses the OpenAI Responses
 
 The endpoint does not expose keys, connection strings, internal tokens, raw provider responses, or detailed production infrastructure.
 
-`npm run doctor` checks the pinned Node and npm versions, Docker daemon, project-local Supabase CLI, local service status, PostgreSQL connectivity, migration state, required ports, local configuration names, Next.js readiness, and the installed Playwright browser. It reports every check with remediation and exits nonzero if a required check fails.
+`npm run doctor` checks the pinned Node and npm versions, local label-reader
+assets, Docker daemon, project-local Supabase CLI, local service status,
+PostgreSQL connectivity, migration state, required ports, local configuration
+names, Next.js readiness, and the installed Playwright browser. It reports every
+check with remediation and exits nonzero if a required check fails.
 
 ## Command reference
 
 | Command | Purpose |
 | --- | --- |
 | `npm run doctor` | Diagnose the complete running development environment. |
+| `npm run doctor:native` | Diagnose the no-container native app, OCR assets, and optional browser runner. |
 | `npm run bootstrap` | Idempotently install dependencies and prepare local services, configuration, types, browsers, and health checks. |
 | `npm run services:start` | Start or reuse Supabase and wait until it is healthy. |
 | `npm run db:sync` | Apply pending migrations and the idempotent catalog seed without resetting local data. |
 | `npm run dev` | Start only Next.js; use this when services are already running. |
+| `npm run dev:native` | Start a credential-free native demo on `127.0.0.1` without Docker or Supabase. |
 | `npm run dev:all` | Start or prepare Supabase, safely synchronize its schema/catalog, then start Next.js. This powers the VS Code task. |
 | `npm run test` | Run the Vitest unit and component suite once. |
 | `npm run test:db` | Run schema, seed, constraint, atomic-RPC, and RLS checks against the running local Supabase database. |
@@ -307,6 +407,8 @@ The endpoint does not expose keys, connection strings, internal tokens, raw prov
 | `npm run typecheck` | Check TypeScript without emitting files. |
 | `npm run lint` | Run ESLint. |
 | `npm run audit:security` | Fail when the installed dependency graph has a high- or critical-severity published advisory. |
+| `npm run ocr:assets` | Rebuild ignored same-origin label-reader assets from the exact pinned npm packages. |
+| `npm run ocr:assets:check` | Verify every local label-reader asset and package version without rewriting files. |
 | `npm run build` | Create the production Next.js build. |
 | `npm run verify:app` | Run the security audit, typecheck, lint, Vitest, production build, and mock-backed Playwright without the database/RLS gate. |
 | `npm run verify` | Run the full security-audit, typecheck, lint, Vitest, database/RLS, generated-type drift, production-build, Playwright, and accessibility gate. |
@@ -379,19 +481,24 @@ npm run verify
 
 Current automated coverage includes:
 
-- Unit coverage of conversions, dates, time zones, progress direction, missing data, trends, six-slot meal normalization, meal guidance, nutrition basis, filtering, safety, plan mapping, schema validation, and idempotency.
+- Unit coverage of conversions, dates, time zones, progress direction, missing
+  data, trends, six-slot meal normalization, meal guidance, nutrition basis,
+  strict label-text parsing and image bounds, filtering, safety, plan mapping,
+  schema validation, and idempotency.
 - Component coverage of authentication controls and DOB confirmation; safe
   session-draft restoration without passwords or legal acceptance; onboarding
   validation, food selection, warning acknowledgement, reordering, and removal;
   plan version review and restore; progress ranges and deletion confirmation;
-  Today and Calendar snack/skip behavior; profile and tutorial controls; weight
-  persistence rollback; and optimistic-save rollback.
+  Today recording and Calendar snack/skip behavior; editable Settings meal
+  preferences and None semantics; private-label reading and retry state;
+  profile and tutorial controls; weight persistence rollback; and
+  optimistic-save rollback.
 - Real local database coverage of schema and seed invariants, immutable DOB and
   legacy-account boundaries, constraints, catalog and pending-record visibility,
   private ownership, cross-user RLS denial, snack and skipped-meal persistence,
   protected onboarding baselines, completed-onboarding replay, external-source
-  category replacement, crash-recoverable label reservations, and atomic
-  application RPCs.
+  category replacement, crash-recoverable label reservations, serialized and
+  bounded meal-preference append, and atomic application RPCs.
 - Playwright coverage of public and legal navigation, registration age
   confirmation, protected mock pages, Today persistence, mock-plan generation
   and acceptance, motion/reduced-motion behavior, mobile primary navigation,
@@ -449,7 +556,7 @@ Build it only after production runtime validation and the production build pass:
 docker build --tag lets-go-green:local .
 ```
 
-The recommended hosted architecture is Vercel for Next.js, hosted Supabase for PostgreSQL and Auth, a production SMTP provider for authentication email, and the OpenAI API from server-only code. The application is hosting-provider neutral; the container can run on another platform that supports Node and secure runtime environment variables.
+The recommended hosted architecture is Vercel for Next.js, hosted Supabase for PostgreSQL and Auth, a production SMTP provider for authentication email, and the OpenAI API from server-only code. The application is hosting-provider neutral; the container can run on another platform that supports Node and secure runtime environment variables. Vercel documents the current [Next.js deployment path](https://vercel.com/docs/frameworks/full-stack/nextjs) and [environment separation](https://vercel.com/docs/environment-variables); changing a hosted environment value requires a new deployment.
 
 Before production:
 
@@ -497,7 +604,13 @@ Never commit API keys, access tokens, database passwords, production credential 
 
 ## Troubleshooting
 
-Start with:
+For a native no-container run, start with:
+
+```bash
+npm run doctor:native
+```
+
+For the complete container-backed local stack, start with:
 
 ```bash
 npm run doctor
@@ -505,7 +618,11 @@ npm run doctor
 
 ### Docker is unavailable
 
-In Codespaces, wait for Docker-in-Docker to finish starting and retry. Locally, confirm Docker Desktop is running, then reopen the repository in the Dev Container. Do not install Supabase directly on the host as a workaround.
+Docker is not required for `npm run dev:native` or `npm run verify:app`.
+Those commands provide the clearly labeled mock application path. For full
+accounts without Docker, use a separate hosted Supabase development project as
+described above. In Codespaces, Docker-backed local services remain available
+after Docker-in-Docker finishes starting.
 
 ### Supabase does not become healthy
 
@@ -544,6 +661,20 @@ Inside the Dev Container, run:
 ```bash
 npx --no-install playwright install --with-deps chromium
 ```
+
+### The private on-device label reader is unavailable
+
+Run:
+
+```bash
+npm run ocr:assets
+npm run ocr:assets:check
+```
+
+Then restart Next.js. These commands copy and verify the pinned worker,
+WebAssembly, and English-language files under the ignored
+`public/ocr-runtime/` directory. They do not upload a label photo or download a
+runtime from a browser CDN.
 
 ### The application health check fails
 

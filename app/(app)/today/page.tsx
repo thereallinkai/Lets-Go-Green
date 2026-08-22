@@ -264,6 +264,7 @@ export default async function TodayPage() {
       demoMode={false}
       name={(profile?.full_name ?? "Member").split(/\s+/)[0]}
       timeZone={timeZone}
+      renderedLocalDay={today}
       initialCheckins={initialCheckins}
       mealDetails={mealDetails}
       weightPoints={weightPoints}

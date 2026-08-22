@@ -89,6 +89,7 @@ ACTUAL_NPM="$(npm --version)"
 
 printf 'Installing exact dependencies from package-lock.json...\n'
 npm ci
+npm run ocr:assets:check
 
 if [[ ! -f supabase/.env ]]; then
   {

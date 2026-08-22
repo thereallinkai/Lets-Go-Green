@@ -4,6 +4,12 @@ import { apiError, apiSuccess } from "@/src/lib/api-response";
 import { isAuthSessionMissing } from "@/src/lib/auth-error-taxonomy";
 import { sanitizeFoodLabelImage } from "@/src/lib/food-label-image";
 import { isDevelopmentDemo } from "@/src/lib/env";
+import {
+  type FoodLabelAdminClient,
+  removeKnownFoodLabelObject,
+  retryPendingFoodLabelObjectCleanup,
+  trustedFoodLabelRpc,
+} from "@/src/lib/food-label-object-cleanup";
 import { createSupabaseAdminClient } from "@/src/lib/supabase/admin";
 import { createSupabaseServerClient } from "@/src/lib/supabase/server";
 
@@ -35,81 +41,22 @@ type FinalizedUpload = {
   pixel_height: number | null;
 };
 
-type AdminClient = ReturnType<typeof createSupabaseAdminClient>;
-
-function trustedRpc(admin: AdminClient) {
-  return admin.rpc.bind(admin) as unknown as (
-    name: string,
-    args: Record<string, unknown>,
-  ) => Promise<{ data: unknown; error: { code?: string } | null }>;
-}
-
-async function retryPendingLabelObjectCleanup(
-  admin: AdminClient,
-  userId: string,
-) {
-  const rpc = trustedRpc(admin);
-  const { data, error } = await rpc("pending_food_label_object_cleanup", {
-    target_user_id: userId,
-    result_limit: 20,
-  });
-  if (error || !Array.isArray(data)) {
-    console.error("food label cleanup lookup failed", { code: error?.code });
-    return false;
-  }
-
-  let complete = true;
-  for (const row of data) {
-    const objectPath =
-      row && typeof row === "object" &&
-      typeof (row as { object_path?: unknown }).object_path === "string"
-        ? (row as { object_path: string }).object_path
-        : null;
-    if (!objectPath || !objectPath.startsWith(`${userId}/`)) {
-      complete = false;
-      console.error("food label cleanup returned an invalid owned path");
-      continue;
-    }
-
-    const { error: removeError } = await admin.storage
-      .from("food-labels")
-      .remove([objectPath]);
-    if (removeError) {
-      complete = false;
-      console.error("food label object cleanup failed");
-      continue;
-    }
-
-    const acknowledgement = await rpc(
-      "complete_food_label_object_cleanup",
-      {
-        target_user_id: userId,
-        target_object_path: objectPath,
-      },
-    );
-    if (acknowledgement.error || acknowledgement.data !== true) {
-      complete = false;
-      console.error("food label object cleanup acknowledgement failed", {
-        code: acknowledgement.error?.code,
-      });
-    }
-  }
-  return complete;
-}
-
 async function abandonLabelUpload(
-  admin: AdminClient,
+  admin: FoodLabelAdminClient,
   userId: string,
   reservationToken: string,
 ) {
-  const { error } = await trustedRpc(admin)("abandon_food_label_upload", {
-    target_user_id: userId,
-    target_reservation_token: reservationToken,
-  });
+  const { error } = await trustedFoodLabelRpc(admin)(
+    "abandon_food_label_upload",
+    {
+      target_user_id: userId,
+      target_reservation_token: reservationToken,
+    },
+  );
   if (error) {
     console.error("food label upload abandonment failed", { code: error.code });
   }
-  return retryPendingLabelObjectCleanup(admin, userId);
+  return retryPendingFoodLabelObjectCleanup(admin, userId);
 }
 
 export async function POST(
@@ -261,7 +208,7 @@ export async function POST(
     }
 
     const admin = createSupabaseAdminClient();
-    const preflightResult = await trustedRpc(admin)(
+    const preflightResult = await trustedFoodLabelRpc(admin)(
       "preflight_food_label_upload",
       {
         target_user_id: auth.user.id,
@@ -357,7 +304,7 @@ export async function POST(
       );
     }
     const objectPath = `${auth.user.id}/${id}/${randomUUID()}.${image.extension}`;
-    const reservationResult = await trustedRpc(admin)(
+    const reservationResult = await trustedFoodLabelRpc(admin)(
       "begin_food_label_upload",
       {
         target_user_id: auth.user.id,
@@ -402,7 +349,7 @@ export async function POST(
       );
     }
     const reservationToken = reservation.reservation_token!;
-    await retryPendingLabelObjectCleanup(admin, auth.user.id);
+    await retryPendingFoodLabelObjectCleanup(admin, auth.user.id);
 
     const { error: storageError } = await admin.storage
       .from("food-labels")
@@ -425,7 +372,7 @@ export async function POST(
         },
       );
     }
-    const storedResult = await trustedRpc(admin)(
+    const storedResult = await trustedFoodLabelRpc(admin)(
       "mark_food_label_upload_stored",
       {
         target_user_id: auth.user.id,
@@ -433,6 +380,7 @@ export async function POST(
       },
     );
     if (storedResult.error || storedResult.data !== true) {
+      await removeKnownFoodLabelObject(admin, auth.user.id, objectPath);
       await abandonLabelUpload(admin, auth.user.id, reservationToken);
       if (!storedResult.error && storedResult.data === false) {
         return apiError(
@@ -447,7 +395,7 @@ export async function POST(
           },
         );
       }
-      await retryPendingLabelObjectCleanup(admin, auth.user.id);
+      await retryPendingFoodLabelObjectCleanup(admin, auth.user.id);
       return apiError(
         "LABEL_IMAGE_SAVE_FAILED",
         "The uploaded image could not be attached to the private draft.",
@@ -461,7 +409,7 @@ export async function POST(
       );
     }
 
-    const finalizeResult = await trustedRpc(admin)(
+    const finalizeResult = await trustedFoodLabelRpc(admin)(
       "finalize_food_label_upload",
       {
         target_user_id: auth.user.id,
@@ -478,6 +426,7 @@ export async function POST(
       ? (finalizeResult.data[0] as FinalizedUpload | undefined)
       : undefined;
     if (finalizeResult.error || !finalized) {
+      await removeKnownFoodLabelObject(admin, auth.user.id, objectPath);
       await abandonLabelUpload(admin, auth.user.id, reservationToken);
       return apiError(
         "LABEL_IMAGE_SAVE_FAILED",
@@ -492,7 +441,8 @@ export async function POST(
       );
     }
     if (!finalized.accepted || finalized.reservation_conflict) {
-      await retryPendingLabelObjectCleanup(admin, auth.user.id);
+      await removeKnownFoodLabelObject(admin, auth.user.id, objectPath);
+      await retryPendingFoodLabelObjectCleanup(admin, auth.user.id);
       return apiError(
         "LABEL_UPLOAD_SUPERSEDED",
         "A newer photo replaced this upload before it finished.",
@@ -505,7 +455,7 @@ export async function POST(
         },
       );
     }
-    const cleanupComplete = await retryPendingLabelObjectCleanup(
+    const cleanupComplete = await retryPendingFoodLabelObjectCleanup(
       admin,
       auth.user.id,
     );

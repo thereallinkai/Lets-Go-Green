@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
+
+fail() {
+  printf 'ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+command -v node >/dev/null 2>&1 \
+  || fail "Node.js 22 is required. Install the version in .nvmrc, then retry."
+command -v npm >/dev/null 2>&1 \
+  || fail "npm is required. Install the version recorded in package.json, then retry."
+
+DEPENDENCIES_READY=false
+if [[ -x node_modules/.bin/next ]] \
+  && npm ls --depth=0 --json >/dev/null 2>&1 \
+  && node -e '
+    for (const packageName of [
+      "tesseract.js",
+      "tesseract.js-core",
+      "@tesseract.js-data/eng",
+    ]) require.resolve(`${packageName}/package.json`);
+  ' >/dev/null 2>&1; then
+  DEPENDENCIES_READY=true
+fi
+
+if [[ "$DEPENDENCIES_READY" != true ]]; then
+  printf 'Installing exact project dependencies from package-lock.json...\n'
+  npm ci
+elif ! node scripts/prepare-ocr-assets.mjs --check >/dev/null 2>&1; then
+  npm run ocr:assets
+fi
+
+APP_PORT="${PORT:-3000}"
+APP_ORIGIN="http://127.0.0.1:${APP_PORT}"
+
+# Exported empty values intentionally take precedence over any container/local
+# Supabase values in .env.local. This command is a clearly labeled,
+# credential-free UI/demo mode and never silently talks to a database.
+export NEXT_PUBLIC_APP_URL="$APP_ORIGIN"
+export NEXT_PUBLIC_SUPABASE_URL=""
+export NEXT_PUBLIC_SUPABASE_ANON_KEY=""
+export SUPABASE_SERVICE_ROLE_KEY=""
+export DATABASE_URL=""
+export AI_PROVIDER="mock"
+export ENABLE_REAL_AI="false"
+export OPENAI_API_KEY=""
+
+printf "Starting Let's Go Green! native demo at %s\n" "$APP_ORIGIN"
+printf 'No container or Docker daemon is used. Demo changes reset when the process restarts.\n'
+printf 'Press Ctrl+C to stop.\n'
+
+exec ./node_modules/.bin/next dev \
+  --hostname 127.0.0.1 \
+  --port "$APP_PORT" \
+  "$@"

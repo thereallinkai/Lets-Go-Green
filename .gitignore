@@ -45,6 +45,7 @@ next-env.d.ts
 /dist/
 /outputs/
 /work/
+/public/ocr-runtime/
 
 # local Supabase CLI state
 /supabase/.branches/

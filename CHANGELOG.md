@@ -3,6 +3,58 @@
 User-visible application releases are recorded here. Version identifiers follow
 the policy in [VERSIONING.md](VERSIONING.md).
 
+## 1.0.0-beta.6 — 2026-08-20
+
+**Let's Go Green! 1.0 Beta 6** makes meal preferences editable after
+onboarding, brings food recording to every Today slot, and adds private
+on-device assistance for reading package nutrition labels.
+
+- Added an authenticated meal-preference editor in Settings for Breakfast,
+  Lunch, and Dinner. It reuses the saved-food discovery and nutrition cards,
+  adds or removes one choice at a time, represents an intentionally empty meal
+  as **None selected**, and explains that changes affect future plan drafts
+  without rewriting an accepted plan or today's log.
+- Added explicit, descriptive None choices for allergies, dietary
+  restrictions, disliked foods, and additional safety context in Settings.
+  Onboarding now exposes the matching allergy, restriction, and safety-context
+  choices; it does not collect disliked foods. Empty values are stored as empty
+  values rather than a literal `None` allergy, restriction, dislike, or safety
+  flag.
+- Added in-browser package-label reading from a selected JPEG or PNG. Pinned
+  Tesseract worker, WebAssembly, and English-language assets load only from this
+  application; the photo is not sent to an OCR, AI, or other external provider
+  for recognition. Only explicitly labeled, sufficiently confident values are
+  suggested, ambiguous values remain blank, and every suggestion must be
+  compared with the package and confirmed before the existing private save.
+- Bounded label reading by file type, file size, decoded dimensions, pixel
+  count, downscaled working image, timeout, cancellation, and one active worker.
+  Replacing a photo or retrying cannot leave stale suggested facts or a
+  confirmation checked, while manual input survives an empty or unreadable
+  recognition result.
+- Exposed **Record food** or **Manage recorded foods** for breakfast, lunch,
+  dinner, and all three snack spaces. Today now separates accepted-plan detail
+  from foods recorded today, discloses that recording a food marks that slot
+  done, keeps delete/status behavior consistent after reload, and gives every
+  repeated control a meal-qualified accessible name.
+- Replaced the oversized completion action with a compact animated status pill
+  that retains a 44-pixel target, visible keyboard focus, text and icon state,
+  `aria-pressed`, dark-mode contrast, reduced-motion behavior, and responsive
+  wrapping.
+- Added Profile-to-Settings preference navigation, expanded structured error
+  and retry states for preference mutations and local label reading, updated
+  container/bootstrap preparation for the pinned OCR assets, and expanded
+  component, route, parser, accessibility, responsive, and end-to-end checks.
+
+The database migration in this release adds an owner-scoped, serialized
+`append_meal_preference` RPC, enforces the 50-choice-per-primary-meal bound,
+validates plan eligibility inside the transaction, and revokes authenticated
+direct inserts or updates that could bypass those checks. Existing preference,
+profile, accepted-plan, daily-log, and private-label rows are preserved;
+owner-scoped selection and one-item removal remain available. The migration
+also layers the Beta 6 health contract over the prior health checks. The OCR
+feature adds no OCR-result table, external OCR recipient, or new photo-retention
+path.
+
 ## 1.0.0-beta.5 — 2026-08-13
 
 **Let's Go Green! 1.0 Beta 5** makes onboarding food discovery shorter,

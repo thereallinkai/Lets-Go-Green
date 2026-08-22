@@ -469,7 +469,7 @@ set local role service_role;
 select ok(
   (
     public.application_health(
-      '20260813000000_reserve_external_food_import_capacity'
+      '20260814000000_append_meal_preferences'
     ) ->> 'migrationCompatible'
   )::boolean,
   'application health accepts the complete beta.5 database contract'
@@ -492,7 +492,7 @@ set local role service_role;
 select is(
   (
     public.application_health(
-      '20260813000000_reserve_external_food_import_capacity'
+      '20260814000000_append_meal_preferences'
     ) ->> 'migrationCompatible'
   )::boolean,
   false,

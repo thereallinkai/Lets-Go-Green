@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { ApiErrorNotice } from "@/components/api-error-notice";
 import styles from "@/components/food-discovery.module.css";
 import type { ApiError } from "@/src/lib/api-response";
@@ -9,6 +9,18 @@ import {
   clientApiError,
 } from "@/src/lib/client-api-error";
 import type { FoodLabelData } from "@/src/lib/domain/food-label";
+import {
+  FoodLabelOcrClientError,
+  inspectFoodLabelImage,
+  recognizeFoodLabelInBrowser,
+  type FoodLabelOcrProgress,
+} from "@/src/lib/food-label-ocr-client";
+import {
+  foodLabelOcrFieldLabels,
+  type FoodLabelOcrField,
+  type FoodLabelOcrResult,
+  type FoodLabelOcrValue,
+} from "@/src/lib/food-label-ocr";
 
 type ApiEnvelope<T> = { data?: T | null; error?: unknown } | null;
 
@@ -16,6 +28,11 @@ type ResumeState = {
   draftId: string;
   labelFingerprint: string;
   imageUploaded: boolean;
+};
+
+type DraftAttempt = {
+  draftId: string;
+  labelFingerprint: string;
 };
 
 type CatalogRefresh = { foodId: string; displayName: string };
@@ -95,6 +112,12 @@ export function FoodLabelUpload({
     displayName: string,
   ) => unknown | Promise<unknown>;
 }) {
+  const idPrefix = useId();
+  const photoHeadingId = `${idPrefix}-label-photo-heading`;
+  const photoRequirementsId = `${idPrefix}-label-photo-requirements`;
+  const photoPrivacyId = `${idPrefix}-label-photo-privacy`;
+  const recognitionHeadingId = `${idPrefix}-automatic-label-reading-heading`;
+  const manualHeadingId = `${idPrefix}-manual-label-heading`;
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
@@ -102,18 +125,44 @@ export function FoodLabelUpload({
   const [photoName, setPhotoName] = useState<string | null>(null);
   const [selectedPhoto, setSelectedPhoto] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [recognition, setRecognition] = useState<FoodLabelOcrResult | null>(null);
+  const [recognitionPending, setRecognitionPending] = useState(false);
+  const [photoPreflightPending, setPhotoPreflightPending] = useState(false);
+  const [recognitionProgress, setRecognitionProgress] =
+    useState<FoodLabelOcrProgress | null>(null);
+  const [skippedOcrFields, setSkippedOcrFields] = useState<string[]>([]);
   const [resume, setResume] = useState<ResumeState | null>(null);
   const [catalogRefresh, setCatalogRefresh] =
     useState<CatalogRefresh | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
+  const confirmationInputRef = useRef<HTMLInputElement>(null);
   const errorRef = useRef<HTMLDivElement>(null);
   const previewUrlRef = useRef<string | null>(null);
+  const recognitionAbortRef = useRef<AbortController | null>(null);
+  const recognitionTaskRef = useRef<Promise<void> | null>(null);
+  const recognitionRequestRef = useRef(0);
+  const photoPreflightAbortRef = useRef<AbortController | null>(null);
+  const photoSelectionRequestRef = useRef(0);
+  const appliedOcrValuesRef = useRef<
+    Partial<Record<FoodLabelOcrField, string>>
+  >({});
+  const draftAttemptRef = useRef<DraftAttempt | null>(null);
 
-  function reportError(nextError: ApiError) {
+  function reportError(nextError: ApiError, options: { focus?: boolean } = {}) {
     setMessage(null);
     setError(nextError);
-    window.requestAnimationFrame(() => errorRef.current?.focus());
+    if (options.focus !== false) {
+      const focusOrigin = document.activeElement;
+      window.requestAnimationFrame(() => {
+        if (
+          document.activeElement === focusOrigin ||
+          document.activeElement === document.body
+        ) {
+          errorRef.current?.focus();
+        }
+      });
+    }
   }
 
   function releasePreview() {
@@ -124,14 +173,219 @@ export function FoodLabelUpload({
     setPreviewUrl(null);
   }
 
-  useEffect(() => () => {
-    if (previewUrlRef.current && typeof URL.revokeObjectURL === "function") {
-      URL.revokeObjectURL(previewUrlRef.current);
-    }
-  }, []);
+  useEffect(
+    () => () => {
+      recognitionRequestRef.current += 1;
+      recognitionAbortRef.current?.abort();
+      photoSelectionRequestRef.current += 1;
+      photoPreflightAbortRef.current?.abort();
+      if (previewUrlRef.current && typeof URL.revokeObjectURL === "function") {
+        URL.revokeObjectURL(previewUrlRef.current);
+      }
+    },
+    [],
+  );
 
-  function selectPhoto(file: File | undefined, input: HTMLInputElement) {
+  function namedTextControl(name: FoodLabelOcrField) {
+    const control = formRef.current?.elements.namedItem(name);
+    return control instanceof HTMLInputElement ||
+      control instanceof HTMLTextAreaElement
+      ? control
+      : null;
+  }
+
+  function clearAppliedOcrValues() {
+    for (const [field, appliedValue] of Object.entries(
+      appliedOcrValuesRef.current,
+    ) as Array<[FoodLabelOcrField, string]>) {
+      const control = namedTextControl(field);
+      if (control?.value === appliedValue) control.value = "";
+    }
+    appliedOcrValuesRef.current = {};
+  }
+
+  function applyOcrValues(result: FoodLabelOcrResult) {
+    const applied: Partial<Record<FoodLabelOcrField, string>> = {};
+    const skipped: string[] = [];
+    for (const [field, value] of Object.entries(result.values) as Array<
+      [FoodLabelOcrField, FoodLabelOcrValue]
+    >) {
+      const control = namedTextControl(field);
+      if (!control) continue;
+      const nextValue = String(value);
+      if (control.value.trim() && control.value !== nextValue) {
+        skipped.push(foodLabelOcrFieldLabels[field]);
+        continue;
+      }
+      control.value = nextValue;
+      applied[field] = nextValue;
+    }
+    appliedOcrValuesRef.current = applied;
+    setSkippedOcrFields(skipped);
+  }
+
+  function cancelRecognition(announce = true) {
+    recognitionRequestRef.current += 1;
+    recognitionAbortRef.current?.abort();
+    recognitionAbortRef.current = null;
+    setRecognitionPending(false);
+    setRecognitionProgress(
+      announce
+        ? { progress: 0, status: "Automatic photo reading canceled. You can retry or enter printed facts yourself." }
+        : null,
+    );
+  }
+
+  function reportImageInspectionError(
+    imageProblem: "OCR_IMAGE_CORRUPT" | "OCR_IMAGE_TOO_LARGE" | "OCR_IMAGE_TOO_SMALL",
+    options: { focus?: boolean } = {},
+  ) {
+    const tooSmall = imageProblem === "OCR_IMAGE_TOO_SMALL";
+    const tooLarge = imageProblem === "OCR_IMAGE_TOO_LARGE";
+    reportError(
+      clientApiError(
+        tooSmall
+          ? "LABEL_IMAGE_RESOLUTION_TOO_LOW"
+          : tooLarge
+            ? "LABEL_IMAGE_PIXELS_TOO_LARGE"
+            : "LABEL_IMAGE_CORRUPT",
+        tooSmall
+          ? "Use a clearer photo at least 480 pixels wide and tall."
+          : tooLarge
+            ? "Use a label photo no larger than 20 megapixels or 20,000 pixels on either side."
+            : "This JPEG or PNG has an unreadable or damaged image header.",
+        tooSmall
+          ? "Retake the full label closer and in focus. The previously selected valid photo, if any, is unchanged."
+          : tooLarge
+            ? "Resize the photo before trying again. It was rejected before decoding, and the previously selected valid photo, if any, is unchanged."
+            : "Export or retake the panel as a valid JPEG or PNG. The previously selected valid photo, if any, is unchanged.",
+        {
+          retryable: false,
+          action: { kind: "edit", label: "Choose another photo" },
+        },
+      ),
+      options,
+    );
+  }
+
+  function analyzePhoto(file: File) {
+    clearAppliedOcrValues();
+    recognitionRequestRef.current += 1;
+    const requestId = recognitionRequestRef.current;
+    const previousTask = recognitionTaskRef.current;
+    recognitionAbortRef.current?.abort();
+    const controller = new AbortController();
+    recognitionAbortRef.current = controller;
+    setRecognition(null);
+    setSkippedOcrFields([]);
+    setRecognitionPending(true);
+    setRecognitionProgress({
+      progress: 0,
+      status: "Starting private on-device label reading…",
+    });
+    setConfirmed(false);
+    setError(null);
+
+    const task = (async () => {
+      // The client resolves an aborted attempt only after its worker termination
+      // has completed. Waiting here guarantees that replacement and retry never
+      // create two OCR workers at the same time.
+      await previousTask?.catch(() => undefined);
+      if (
+        recognitionRequestRef.current !== requestId ||
+        controller.signal.aborted
+      ) {
+        return;
+      }
+
+      try {
+        const result = await recognizeFoodLabelInBrowser(file, {
+          signal: controller.signal,
+          onProgress(progress) {
+            if (recognitionRequestRef.current === requestId) {
+              setRecognitionProgress(progress);
+            }
+          },
+        });
+        if (recognitionRequestRef.current !== requestId) return;
+        setRecognition(result);
+        setConfirmed(false);
+        applyOcrValues(result);
+      } catch (recognitionError) {
+        if (
+          recognitionRequestRef.current !== requestId ||
+          (recognitionError instanceof FoodLabelOcrClientError &&
+            recognitionError.code === "OCR_ABORTED")
+        ) {
+          return;
+        }
+        const assetsUnavailable =
+          recognitionError instanceof FoodLabelOcrClientError &&
+          recognitionError.code === "OCR_ASSETS_UNAVAILABLE";
+        const imageProblem =
+          recognitionError instanceof FoodLabelOcrClientError
+            ? recognitionError.code
+            : null;
+        if (
+          imageProblem === "OCR_IMAGE_CORRUPT" ||
+          imageProblem === "OCR_IMAGE_TOO_LARGE" ||
+          imageProblem === "OCR_IMAGE_TOO_SMALL"
+        ) {
+          reportImageInspectionError(imageProblem, { focus: false });
+          return;
+        }
+        const timedOut = imageProblem === "OCR_TIMEOUT";
+        const downscaleFailed = imageProblem === "OCR_DOWNSCALE_FAILED";
+        reportError(
+          clientApiError(
+            assetsUnavailable
+              ? "LABEL_READER_ASSETS_UNAVAILABLE"
+              : timedOut
+                ? "LABEL_RECOGNITION_TIMED_OUT"
+                : downscaleFailed
+                  ? "LABEL_IMAGE_DOWNSCALE_FAILED"
+                  : "LABEL_RECOGNITION_FAILED",
+            assetsUnavailable
+              ? "The private label reader is unavailable in this development session."
+              : timedOut
+                ? "The private label reader stopped after 60 seconds."
+                : downscaleFailed
+                  ? "This browser could not resize the large photo safely for local reading."
+                  : "The private label reader could not finish this photo.",
+            assetsUnavailable
+              ? "Run npm run ocr:assets and restart the app, then retry. The photo stayed on this device and you can still enter printed facts yourself."
+              : timedOut
+                ? "The worker was stopped and the photo stayed on this device. Retry with a closer crop, or enter only facts you can read yourself."
+                : downscaleFailed
+                  ? "Crop or resize the photo, then choose it again. The current photo remains available for manual review and no value was guessed."
+                  : "The photo stayed on this device and no values were guessed. Retry once, retake the panel in even light, or enter only facts you can read yourself.",
+            {
+              retryable: !downscaleFailed,
+              action: downscaleFailed
+                ? { kind: "edit", label: "Choose a cropped photo" }
+                : { kind: "retry", label: "Retry private photo reading" },
+            },
+          ),
+          { focus: false },
+        );
+      } finally {
+        if (recognitionRequestRef.current === requestId) {
+          recognitionAbortRef.current = null;
+          setRecognitionPending(false);
+        }
+      }
+    })();
+    recognitionTaskRef.current = task;
+    return task;
+  }
+
+  async function selectPhoto(file: File | undefined, input: HTMLInputElement) {
     if (!file) return;
+    photoSelectionRequestRef.current += 1;
+    const requestId = photoSelectionRequestRef.current;
+    photoPreflightAbortRef.current?.abort();
+    photoPreflightAbortRef.current = null;
+    setPhotoPreflightPending(false);
     if (!['image/jpeg', 'image/png'].includes(file.type)) {
       input.value = "";
       reportError(
@@ -162,6 +416,56 @@ export function FoodLabelUpload({
       );
       return;
     }
+    const controller = new AbortController();
+    photoPreflightAbortRef.current = controller;
+    setPhotoPreflightPending(true);
+    setError(null);
+    try {
+      await inspectFoodLabelImage(file, controller.signal);
+    } catch (inspectionError) {
+      if (
+        photoSelectionRequestRef.current !== requestId ||
+        (inspectionError instanceof FoodLabelOcrClientError &&
+          inspectionError.code === "OCR_ABORTED")
+      ) {
+        return;
+      }
+      input.value = "";
+      if (
+        inspectionError instanceof FoodLabelOcrClientError &&
+        (inspectionError.code === "OCR_IMAGE_CORRUPT" ||
+          inspectionError.code === "OCR_IMAGE_TOO_LARGE" ||
+          inspectionError.code === "OCR_IMAGE_TOO_SMALL")
+      ) {
+        reportImageInspectionError(inspectionError.code);
+      } else {
+        reportError(
+          clientApiError(
+            "LABEL_IMAGE_PREFLIGHT_FAILED",
+            "The package-label photo could not be checked safely.",
+            "Choose the JPEG or PNG again. The previously selected valid photo, if any, is unchanged.",
+            {
+              retryable: true,
+              action: { kind: "retry", label: "Choose the photo again" },
+            },
+          ),
+        );
+      }
+      return;
+    } finally {
+      if (photoSelectionRequestRef.current === requestId) {
+        photoPreflightAbortRef.current = null;
+        setPhotoPreflightPending(false);
+      }
+    }
+    if (photoSelectionRequestRef.current !== requestId) return;
+    // The selected File is held in component state. Clearing the native input
+    // lets a user choose the same image again and prevents a rejected
+    // replacement from making browser constraint validation disagree with the
+    // still-valid photo in state.
+    input.value = "";
+    cancelRecognition(false);
+    clearAppliedOcrValues();
     releasePreview();
     setError(null);
     setCatalogRefresh(null);
@@ -179,11 +483,40 @@ export function FoodLabelUpload({
       previewUrlRef.current = url;
       setPreviewUrl(url);
     }
+    void analyzePhoto(file);
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending) return;
+    if (photoPreflightPending) {
+      reportError(
+        clientApiError(
+          "LABEL_IMAGE_PREFLIGHT_IN_PROGRESS",
+          "The new photo is still being checked safely.",
+          "Wait for its dimensions and image header to be checked before saving. The previous valid photo has not been replaced yet.",
+          {
+            retryable: false,
+            action: { kind: "edit", label: "Wait for the photo check" },
+          },
+        ),
+      );
+      return;
+    }
+    if (recognitionPending) {
+      reportError(
+        clientApiError(
+          "LABEL_RECOGNITION_IN_PROGRESS",
+          "The private label reader is still checking this photo.",
+          "Wait for the reading to finish or cancel it before reviewing and saving the printed facts.",
+          {
+            retryable: false,
+            action: { kind: "edit", label: "Wait or cancel photo reading" },
+          },
+        ),
+      );
+      return;
+    }
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const file = selectedPhoto;
@@ -208,7 +541,7 @@ export function FoodLabelUpload({
         clientApiError(
           "LABEL_TRANSCRIPTION_UNCONFIRMED",
           "The package transcription has not been confirmed.",
-          "Review the serving nutrition, ingredients, and allergen statement, then select the manual-confirmation checkbox.",
+          "Review the serving nutrition, ingredients, and allergen statement, then select the final accuracy-confirmation checkbox.",
           {
             retryable: false,
             action: { kind: "edit", label: "Review the confirmation" },
@@ -227,6 +560,21 @@ export function FoodLabelUpload({
           {
             retryable: false,
             action: { kind: "edit", label: "Review highlighted fields" },
+          },
+        ),
+      );
+      return;
+    }
+    const selectedCategories = form.getAll("categorySlugs").map(String);
+    if (selectedCategories.length === 0) {
+      reportError(
+        clientApiError(
+          "LABEL_CATEGORY_REQUIRED",
+          "Choose at least one food category.",
+          "Select every category that clearly describes this exact product before saving.",
+          {
+            retryable: false,
+            action: { kind: "edit", label: "Choose a food category" },
           },
         ),
       );
@@ -262,7 +610,7 @@ export function FoodLabelUpload({
       vitaminDMicrograms: optional("vitaminDMicrograms"),
       ingredientsText: String(form.get("ingredientsText") ?? "").trim(),
       allergenStatement: String(form.get("allergenStatement") ?? "").trim(),
-      categorySlugs: form.getAll("categorySlugs").map(String),
+      categorySlugs: selectedCategories,
       allergenSlugs: form.getAll("allergenSlugs").map(String),
       restrictionSlugs: form.getAll("restrictionSlugs").map(String),
       sourceNote: "",
@@ -274,10 +622,18 @@ export function FoodLabelUpload({
     const labelFingerprint = JSON.stringify(labelData);
     let currentResume =
       resume?.labelFingerprint === labelFingerprint ? resume : null;
+    let draftAttempt = draftAttemptRef.current;
+    if (!currentResume && draftAttempt?.labelFingerprint !== labelFingerprint) {
+      draftAttempt = {
+        draftId: globalThis.crypto.randomUUID(),
+        labelFingerprint,
+      };
+      draftAttemptRef.current = draftAttempt;
+    }
     let operationFallback = clientApiError(
       "LABEL_DRAFT_NETWORK_ERROR",
-      "The private label draft was not saved.",
-      "The label service could not be reached. Your photo and transcription remain in this browser.",
+      "The private label draft response was not received.",
+      "Retry this unchanged form. The same one-use draft ID will be reused, so a server-committed draft is not duplicated.",
       {
         retryable: true,
         action: { kind: "retry", label: "Retry saving" },
@@ -295,7 +651,10 @@ export function FoodLabelUpload({
         const draftResponse = await fetch("/api/food-labels", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify(labelData),
+          body: JSON.stringify({
+            draftId: draftAttempt!.draftId,
+            labelData,
+          }),
         });
         const draft = (await draftResponse.json().catch(() => null)) as ApiEnvelope<{
           id: string;
@@ -303,7 +662,8 @@ export function FoodLabelUpload({
         if (
           !draftResponse.ok ||
           !draft?.data ||
-          typeof draft.data.id !== "string"
+          typeof draft.data.id !== "string" ||
+          draft.data.id !== draftAttempt!.draftId
         ) {
           throw apiErrorFromPayload(
             draft,
@@ -323,6 +683,7 @@ export function FoodLabelUpload({
           labelFingerprint,
           imageUploaded: false,
         };
+        draftAttemptRef.current = null;
         setResume(currentResume);
       }
 
@@ -415,10 +776,24 @@ export function FoodLabelUpload({
           : "Saved as a private food for your plans only. The original upload was not retained as-is; server-re-encoded evidence stays private and is never shared. No shared catalog copy was requested.",
       );
       setResume(null);
+      draftAttemptRef.current = null;
       formElement.reset();
+      const categoryControls = Array.from(
+        formElement.querySelectorAll<HTMLInputElement>(
+          'input[name="categorySlugs"]',
+        ),
+      );
+      categoryControls.forEach((control, index) => {
+        control.required = index === 0;
+        control.setCustomValidity("");
+      });
       setConfirmed(false);
       setPhotoName(null);
       setSelectedPhoto(null);
+      setRecognition(null);
+      setRecognitionProgress(null);
+      setSkippedOcrFields([]);
+      appliedOcrValuesRef.current = {};
       releasePreview();
       try {
         const refreshed = await onCreated?.(result.data.foodId, displayName);
@@ -483,13 +858,22 @@ export function FoodLabelUpload({
     if (error?.action?.kind === "retry") {
       if (catalogRefresh) {
         void retryCatalogRefresh();
+      } else if (error.code === "LABEL_IMAGE_PREFLIGHT_FAILED") {
+        photoInputRef.current?.focus();
+        photoInputRef.current?.click();
+      } else if (error.code.includes("RECOGNITION") || error.code.includes("READER")) {
+        if (selectedPhoto) void analyzePhoto(selectedPhoto);
       } else {
         formRef.current?.requestSubmit();
       }
       return;
     }
     if (error?.action?.kind !== "edit") return;
-    if (error.code.includes("IMAGE")) {
+    if (error.code === "LABEL_TRANSCRIPTION_UNCONFIRMED") {
+      confirmationInputRef.current?.focus();
+      return;
+    }
+    if (error.code.includes("IMAGE") || error.code.includes("RECOGNITION")) {
       photoInputRef.current?.focus();
       return;
     }
@@ -512,10 +896,16 @@ export function FoodLabelUpload({
   return (
     <form
       className={styles.labelForm}
-      aria-busy={pending}
+      aria-busy={pending || recognitionPending || photoPreflightPending}
       noValidate
       onChange={(event) => {
         const changedControl = event.target as unknown;
+        if (
+          changedControl !== photoInputRef.current &&
+          changedControl !== confirmationInputRef.current
+        ) {
+          setConfirmed(false);
+        }
         if (changedControl !== photoInputRef.current) setError(null);
       }}
       onSubmit={submit}
@@ -523,14 +913,14 @@ export function FoodLabelUpload({
     >
       <fieldset className={styles.labelTransaction} disabled={pending}>
         <legend className="sr-only">Package-label submission</legend>
-        <section className={styles.photoFirst} aria-labelledby="label-photo-heading">
-        <h3 id="label-photo-heading">1. Start with the package label</h3>
+        <section className={styles.photoFirst} aria-labelledby={photoHeadingId}>
+        <h3 id={photoHeadingId}>1. Start with the package label</h3>
         <p className={styles.photoIntro}>
-          This image becomes private, server-re-encoded evidence, not an automatic
-          nutrition reading. The app does not use it to guess or silently fill any
-          field.
+          The app reads this photo on this device and fills only clearly labeled,
+          high-confidence facts. The photo is not sent to an OCR or AI provider.
+          Nothing is confirmed automatically, and unreadable values stay blank.
         </p>
-        <ul className={styles.requirements} id="label-photo-requirements">
+        <ul className={styles.requirements} id={photoRequirementsId}>
           <li>Show the full Nutrition Facts panel straight-on and in focus.</li>
           <li>Include the product or flavor name in the frame when possible.</li>
           <li>
@@ -547,18 +937,24 @@ export function FoodLabelUpload({
             name="nutritionImage"
             accept="image/jpeg,image/png"
             capture="environment"
-            aria-describedby="label-photo-requirements label-photo-privacy"
-            required
+            aria-describedby={`${photoRequirementsId} ${photoPrivacyId}`}
             ref={photoInputRef}
             onChange={(event) =>
-              selectPhoto(event.currentTarget.files?.[0], event.currentTarget)
+              void selectPhoto(event.currentTarget.files?.[0], event.currentTarget)
             }
           />
-          <span className={styles.photoIntro} id="label-photo-privacy">
+          <span className={styles.photoIntro} id={photoPrivacyId}>
             The original upload is not retained as-is. Server-re-encoded evidence
             stays private and is never shared.
           </span>
         </label>
+        {photoPreflightPending ? (
+          <p className={styles.ocrCanceledStatus} role="status" aria-live="polite">
+            Checking the new photo header and dimensions before any preview or
+            reader starts. The previous valid photo is unchanged until this check
+            passes.
+          </p>
+        ) : null}
         {photoName ? (
           <div className={styles.photoPreview} aria-live="polite">
             {previewUrl ? (
@@ -574,14 +970,148 @@ export function FoodLabelUpload({
             </p>
           </div>
         ) : null}
+        {recognitionPending && recognitionProgress ? (
+          <div
+            className={styles.ocrProgressCard}
+            role="status"
+            aria-live="polite"
+          >
+            <div className={styles.ocrProgressHeading}>
+              <strong>{recognitionProgress.status}</strong>
+              <span>{Math.round(recognitionProgress.progress * 100)}%</span>
+            </div>
+            <progress
+              aria-label="Private label reading progress"
+              max="100"
+              value={Math.round(recognitionProgress.progress * 100)}
+            />
+            <p>
+              Worker, OCR model, and photo processing stay in this browser. You
+              can cancel or replace the photo at any time.
+            </p>
+            <button
+              className="button button-quiet"
+              type="button"
+              onClick={() => cancelRecognition()}
+            >
+              Cancel photo reading
+            </button>
+          </div>
+        ) : null}
+        {!recognitionPending && recognitionProgress && !recognition ? (
+          <div className={styles.ocrCanceledStatus}>
+            <p role="status">{recognitionProgress.status}</p>
+            {selectedPhoto ? (
+              <button
+                className="button button-quiet"
+                type="button"
+                onClick={() => void analyzePhoto(selectedPhoto)}
+              >
+                Read this photo again
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        {recognition ? (
+          <section
+            className={styles.ocrReviewCard}
+            aria-labelledby={recognitionHeadingId}
+          >
+            <div className={styles.ocrReviewHeading}>
+              <div>
+                <p className="eyebrow">Private on-device reading</p>
+                <h4 id={recognitionHeadingId}>
+                  Review every filled suggestion
+                </h4>
+              </div>
+              <span>{Object.keys(recognition.values).length} fields read</span>
+            </div>
+            <p>
+              These are OCR suggestions, not verified facts. Compare each one
+              with the photo before confirming; reader confidence is not a
+              guarantee of accuracy.
+            </p>
+            {!Object.keys(recognition.values).length ? (
+              <p className={styles.ocrNeedsReview} role="status">
+                No facts were clear enough to fill automatically, so nothing was
+                guessed. Retake the full panel in even light or enter only values
+                you can read yourself.
+              </p>
+            ) : null}
+            {Object.keys(recognition.values).length ? (
+              <details className={styles.ocrEvidence}>
+                <summary>See recognized lines and confidence</summary>
+                <ul>
+                  {(Object.keys(recognition.values) as FoodLabelOcrField[]).map(
+                    (field) => (
+                      <li key={field}>
+                        <strong>{foodLabelOcrFieldLabels[field]}</strong>{" "}
+                        <span>
+                          {Math.round(recognition.confidenceByField[field] ?? 0)}%
+                          reader confidence · “{recognition.evidenceByField[field]}”
+                        </span>
+                      </li>
+                    ),
+                  )}
+                </ul>
+              </details>
+            ) : null}
+            {recognition.unreadableRequiredFields.length ? (
+              <div className={styles.ocrNeedsReview}>
+                <strong>Still needs manual entry or a clearer photo:</strong>{" "}
+                {recognition.unreadableRequiredFields.join(", ")}.
+                {recognition.unreadableRequiredFields.includes("Brand") ||
+                recognition.unreadableRequiredFields.includes("Product")
+                  ? " Nutrition panels often do not print a labeled Brand or Product field."
+                  : ""}
+              </div>
+            ) : null}
+            {skippedOcrFields.length ? (
+              <p className={styles.ocrNeedsReview}>
+                Existing entries were not overwritten: {skippedOcrFields.join(", ")}.
+              </p>
+            ) : null}
+            {recognition.allergenSuggestions.length ? (
+              <p className={styles.ocrNeedsReview}>
+                Possible allergens in the explicit package statement:{" "}
+                {recognition.allergenSuggestions
+                  .map((slug) =>
+                    allergens.find(([value]) => value === slug)?.[1] ?? slug,
+                  )
+                  .join(", ")}
+                . Review and select them below; nothing was selected automatically.
+              </p>
+            ) : null}
+            {recognition.warnings.length ? (
+              <ul className={styles.ocrWarnings}>
+                {recognition.warnings.map((warning) => (
+                  <li key={warning}>{warning}</li>
+                ))}
+              </ul>
+            ) : null}
+            <button
+              className="button button-quiet"
+              type="button"
+              onClick={() => selectedPhoto && void analyzePhoto(selectedPhoto)}
+            >
+              Read this photo again
+            </button>
+          </section>
+        ) : null}
         </section>
 
-        <section className={styles.manualSection} aria-labelledby="manual-label-heading">
+        <fieldset
+          className={styles.labelTransaction}
+          disabled={photoPreflightPending || recognitionPending}
+        >
+        <legend className="sr-only">Review and confirm recognized package facts</legend>
+        <section className={styles.manualSection} aria-labelledby={manualHeadingId}>
         <div className={styles.manualHeading}>
-          <h3 id="manual-label-heading">2. Copy the printed facts</h3>
+          <h3 id={manualHeadingId}>2. Review and complete the printed facts</h3>
           <p>
-            Enter only what you can read on this exact package. Leave optional
-            nutrients blank when the panel does not state them; do not estimate.
+            The local reader fills only clear suggestions. Correct any mismatch,
+            complete required blanks from this exact package, and leave optional
+            nutrients blank when they are not printed. Do not estimate.
           </p>
         </div>
         <div className={styles.fieldGrid}>
@@ -603,7 +1133,7 @@ export function FoodLabelUpload({
           </label>
           <label className={`field ${styles.labelField}`}>
             <span>Serving description</span>
-            <input name="servingDescription" defaultValue="1 scoop" maxLength={160} />
+            <input name="servingDescription" maxLength={160} placeholder="1 scoop" />
           </label>
           <label className={`field ${styles.labelField}`}>
             <span>Serving weight (g)</span>
@@ -775,15 +1305,17 @@ export function FoodLabelUpload({
         <label className={styles.confirmCard}>
           <input
             type="checkbox"
+            name="confirmedAccurate"
             checked={confirmed}
+            ref={confirmationInputRef}
             onChange={(event) => {
               setConfirmed(event.target.checked);
               setError(null);
             }}
           />
           <span>
-            I manually copied the serving nutrition, ingredients, and allergen
-            statement from this exact package. I did not estimate missing facts.
+            I compared every automatic suggestion and manual entry with this exact
+            package. I corrected any mismatch and did not estimate missing facts.
           </span>
         </label>
 
@@ -810,9 +1342,15 @@ export function FoodLabelUpload({
           <button
             className="button button-dark"
             type="submit"
-            disabled={pending}
+            disabled={pending || recognitionPending || photoPreflightPending}
           >
-            {pending ? "Saving private food…" : "Confirm and save private food"}
+            {pending
+              ? "Saving private food…"
+              : photoPreflightPending
+                ? "Checking label photo…"
+              : recognitionPending
+                ? "Reading label photo…"
+                : "Confirm and save private food"}
           </button>
           <p>
             Your confirmed private food can be used in your plan. Sharing is
@@ -820,6 +1358,7 @@ export function FoodLabelUpload({
           </p>
         </div>
         </section>
+        </fieldset>
       </fieldset>
     </form>
   );

@@ -12,6 +12,7 @@ export default defineConfig([
     ".wrangler/**",
     "coverage/**",
     "playwright-report/**",
+    "public/ocr-runtime/**",
     "test-results/**",
     "node_modules/**",
     "out/**",

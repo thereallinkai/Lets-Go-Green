@@ -60,14 +60,29 @@ const allergenAliases: Record<string, RegExp> = {
   sesame: /\bsesame\b/i,
 };
 
+const allergenNegativeAlias =
+  "(?:milk|dairy|whey|casein|caseinate|lactalbumin|eggs?|albumen|ovalbumin|fish|anchov(?:y|ies)|cod|salmon|tuna|shellfish|shrimp|prawn|crab|lobster|crayfish|tree[- ]?nuts?|almond|cashew|walnut|pecan|pistachio|hazelnut|macadamia|brazil nut|peanuts?|wheat|spelt|semolina|durum|soy|soya|sesame)";
+
+export function removeNegatedAllergenMentions(statement: string) {
+  return statement
+    .replace(
+      new RegExp(`\\b${allergenNegativeAlias}[- ]free\\b`, "gi"),
+      "",
+    )
+    .replace(
+      new RegExp(
+        `\\b(?:no|without|free\\s+from)\\s+(?:declared\\s+)?${allergenNegativeAlias}(?:\\s*(?:,|and|or)\\s*${allergenNegativeAlias})*`,
+        "gi",
+      ),
+      "",
+    );
+}
+
 function validateAllergenSelections(
   value: z.infer<typeof foodLabelObjectSchema>,
   context: z.RefinementCtx,
 ) {
-  const statement = value.allergenStatement.replace(
-    /\b(?:dairy|milk|egg|fish|shellfish|peanut|tree[- ]?nut|wheat|soy|soya|sesame)[- ]free\b/gi,
-    "",
-  );
+  const statement = removeNegatedAllergenMentions(value.allergenStatement);
   const selected = new Set(value.allergenSlugs);
   for (const [slug, pattern] of Object.entries(allergenAliases)) {
     if (pattern.test(statement) && !selected.has(slug)) {

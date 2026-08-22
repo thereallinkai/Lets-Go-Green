@@ -249,7 +249,7 @@
   flex: 0 0 auto;
   max-width: 11rem;
   color: #49735a;
-  font-size: 0.62rem;
+  font-size: 0.78rem;
   font-weight: 780;
   line-height: 1.35;
   text-align: right;
@@ -359,7 +359,7 @@
   background: #f4f7f1;
   padding: 0.62rem;
   color: #304f3c;
-  font-size: 0.68rem;
+  font-size: 0.8rem;
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
@@ -519,7 +519,7 @@
 
 .labelFallback > summary span {
   color: var(--ink-soft);
-  font-size: 0.66rem;
+  font-size: 0.78rem;
 }
 
 .labelFallbackBody {
@@ -570,7 +570,7 @@
   margin: 0.7rem 0;
   padding-left: 1.1rem;
   color: #3c5e48;
-  font-size: 0.68rem;
+  font-size: 0.78rem;
   line-height: 1.4;
 }
 
@@ -585,7 +585,7 @@
 }
 
 .photoPicker > span:first-child {
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 800;
 }
 
@@ -593,11 +593,11 @@
   min-width: 0;
   width: 100%;
   color: #355742;
-  font-size: 0.68rem;
+  font-size: 0.8rem;
 }
 
 .photoInput::file-selector-button {
-  min-height: 38px;
+  min-height: 44px;
   margin-right: 0.55rem;
   border: 1px solid #73977c;
   border-radius: 9px;
@@ -635,6 +635,131 @@
   margin: 0;
 }
 
+.ocrProgressCard,
+.ocrReviewCard {
+  min-width: 0;
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0.75rem;
+  border: 1px solid rgba(47, 125, 78, 0.26);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.82);
+  padding: 0.8rem;
+  animation: result-in 360ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.ocrProgressHeading,
+.ocrReviewHeading {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.ocrProgressHeading span,
+.ocrReviewHeading > span {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #e4f2dc;
+  padding: 0.25rem 0.5rem;
+  color: #275b3b;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.ocrProgressCard progress {
+  width: 100%;
+  height: 0.55rem;
+  accent-color: #2f7d4e;
+}
+
+.ocrProgressCard p,
+.ocrReviewCard > p,
+.ocrCanceledStatus {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.ocrProgressCard button,
+.ocrReviewCard button {
+  justify-self: start;
+}
+
+.ocrCanceledStatus {
+  margin-top: 0.7rem;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.68);
+  padding: 0.65rem;
+}
+
+.ocrCanceledStatus p {
+  margin: 0;
+}
+
+.ocrCanceledStatus button {
+  margin-top: 0.65rem;
+}
+
+.ocrReviewHeading h4 {
+  margin: 0.12rem 0 0;
+  font-family: Georgia, serif;
+  font-size: 0.95rem;
+}
+
+.ocrReviewHeading p {
+  margin: 0;
+}
+
+.ocrEvidence {
+  min-width: 0;
+  border-radius: 10px;
+  background: #f3f8ef;
+  padding: 0.65rem;
+}
+
+.ocrEvidence summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.ocrEvidence ul,
+.ocrWarnings {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0.6rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.ocrEvidence li span {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--ink-soft);
+}
+
+.ocrNeedsReview {
+  margin: 0;
+  border-left: 3px solid #c48a28;
+  background: #fff9e9;
+  padding: 0.55rem 0.65rem;
+  color: #604916;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.ocrWarnings {
+  margin-top: 0;
+  color: #6c4b1e;
+}
+
 .manualSection {
   min-width: 0;
   margin-top: 1rem;
@@ -649,7 +774,7 @@
 .manualHeading p {
   margin: 0.3rem 0 0;
   color: var(--ink-soft);
-  font-size: 0.7rem;
+  font-size: 0.8rem;
   line-height: 1.5;
 }
 
@@ -680,12 +805,15 @@
 }
 
 .detailsPanel > summary {
-  font-size: 0.72rem;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  font-size: 0.8rem;
   font-weight: 800;
 }
 
 .categoryFieldset legend {
-  font-size: 0.75rem;
+  font-size: 0.82rem;
   font-weight: 800;
 }
 
@@ -704,9 +832,10 @@
   gap: 0.25rem;
   border-radius: 999px;
   background: #eff3e9;
-  padding: 0.35rem 0.55rem;
+  min-height: 44px;
+  padding: 0.45rem 0.65rem;
   color: #4e6656;
-  font-size: 0.62rem;
+  font-size: 0.78rem;
 }
 
 .confirmCard,
@@ -721,7 +850,7 @@
   background: #f7faf4;
   padding: 0.75rem;
   color: #344f3d;
-  font-size: 0.7rem;
+  font-size: 0.8rem;
   line-height: 1.45;
 }
 
@@ -729,6 +858,8 @@
 .shareCard input {
   flex: 0 0 auto;
   margin-top: 0.15rem;
+  min-width: 22px;
+  min-height: 22px;
 }
 
 .shareCard {
@@ -754,7 +885,7 @@
   background: #eef7ea;
   padding: 0.7rem;
   color: #28553b;
-  font-size: 0.7rem;
+  font-size: 0.8rem;
   line-height: 1.45;
 }
 
@@ -781,7 +912,7 @@
 .submitActions p {
   margin: 0;
   color: var(--ink-soft);
-  font-size: 0.64rem;
+  font-size: 0.78rem;
   line-height: 1.45;
 }
 
@@ -829,9 +960,37 @@
 :global(html[data-theme="dark"]) .labelFallbackBody > p,
 :global(html[data-theme="dark"]) .photoIntro,
 :global(html[data-theme="dark"]) .photoFileName,
+:global(html[data-theme="dark"]) .ocrProgressCard p,
+:global(html[data-theme="dark"]) .ocrReviewCard > p,
+:global(html[data-theme="dark"]) .ocrCanceledStatus,
+:global(html[data-theme="dark"]) .ocrEvidence li span,
 :global(html[data-theme="dark"]) .manualHeading p,
 :global(html[data-theme="dark"]) .submitActions p {
   color: #b7c8bb;
+}
+
+:global(html[data-theme="dark"]) .ocrProgressCard,
+:global(html[data-theme="dark"]) .ocrReviewCard,
+:global(html[data-theme="dark"]) .ocrCanceledStatus {
+  border-color: #45694d;
+  background: #172b1e;
+}
+
+:global(html[data-theme="dark"]) .ocrProgressHeading span,
+:global(html[data-theme="dark"]) .ocrReviewHeading > span,
+:global(html[data-theme="dark"]) .ocrEvidence {
+  background: #203d28;
+  color: #dff2df;
+}
+
+:global(html[data-theme="dark"]) .ocrNeedsReview {
+  border-left-color: #edbd62;
+  background: #3b321c;
+  color: #f5daa1;
+}
+
+:global(html[data-theme="dark"]) .ocrWarnings {
+  color: #efd39d;
 }
 
 :global(html[data-theme="dark"]) .mealDestination {
@@ -1085,6 +1244,8 @@
 @media (prefers-reduced-motion: reduce) {
   .resultCard,
   .notice,
+  .ocrProgressCard,
+  .ocrReviewCard,
   .photoPreview,
   .searchingBadge,
   .loadingStack span {

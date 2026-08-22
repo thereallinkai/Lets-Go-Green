@@ -22,6 +22,21 @@ const nextConfig: NextConfig = {
             value:
               "camera=(self), microphone=(), geolocation=(self), payment=()",
           },
+          {
+            key: "Content-Security-Policy",
+            value: "worker-src 'self'; child-src 'self'",
+          },
+        ],
+      },
+      {
+        source: "/ocr-runtime/:path*",
+        headers: [
+          {
+            key: "Content-Security-Policy",
+            value:
+              "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'",
+          },
+          { key: "Cross-Origin-Resource-Policy", value: "same-origin" },
         ],
       },
     ];

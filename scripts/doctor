@@ -80,6 +80,13 @@ else
   fail "npm is missing. Rebuild the Dev Container."
 fi
 
+if command -v node >/dev/null 2>&1 \
+  && node scripts/prepare-ocr-assets.mjs --check >/dev/null 2>&1; then
+  pass "Private on-device label-reader assets match the pinned packages."
+else
+  fail "Private label-reader assets are missing or stale. Run 'npm run ocr:assets', then restart the app."
+fi
+
 if command -v docker >/dev/null 2>&1; then
   if docker info >/dev/null 2>&1; then
     pass "Docker CLI and daemon are available."

@@ -163,6 +163,9 @@ describe("ProfileView", () => {
     expect(
       screen.getByRole("link", { name: /Double rich chocolate whey/i }),
     ).toHaveAttribute("href", expect.stringContaining("google.com/maps/search"));
+    expect(
+      screen.getByRole("link", { name: "Edit meal preferences" }),
+    ).toHaveAttribute("href", "/settings#preferences");
   });
 
   it("queues tutorial replay when the tour listener has not mounted yet", async () => {

@@ -71,6 +71,23 @@ describe("food label input", () => {
     ).toBe(false);
   });
 
+  it("does not turn explicitly negated named allergens into required selections", () => {
+    expect(
+      foodLabelDataSchema.safeParse({
+        ...whey,
+        allergenStatement: "Contains no milk. Free from egg and soy.",
+        allergenSlugs: [],
+      }).success,
+    ).toBe(true);
+    expect(
+      foodLabelDataSchema.safeParse({
+        ...whey,
+        allergenStatement: "Contains no milk. May contain soy.",
+        allergenSlugs: [],
+      }).success,
+    ).toBe(false);
+  });
+
   it("requires explicit allergen and restriction review at confirmation", () => {
     expect(
       confirmedFoodLabelDataSchema.safeParse({

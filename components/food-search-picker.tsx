@@ -238,17 +238,21 @@ function nutritionSummary(candidate: ExternalFoodCandidate) {
 }
 
 export function FoodSearchPicker({
+  addDisabled = false,
   foods,
   search,
   onSearchChange,
   onAdd,
   onCatalogChanged,
+  showLabelUploadFallback = true,
 }: {
+  addDisabled?: boolean;
   foods: FoodPickerItem[];
   search: string;
   onSearchChange: (value: string) => void;
   onAdd: (meal: Meal, food: FoodPickerItem) => void;
   onCatalogChanged: (query?: string) => unknown | Promise<unknown>;
+  showLabelUploadFallback?: boolean;
 }) {
   const [phase, setPhase] = useState<SearchPhase>("idle");
   const [candidates, setCandidates] = useState<ExternalFoodCandidate[]>([]);
@@ -997,10 +1001,14 @@ export function FoodSearchPicker({
                   <div className={styles.addControls}>
                     <button
                       className="button button-dark"
-                      disabled={!food.planEligible || !destinationMeal}
+                      disabled={
+                        addDisabled || !food.planEligible || !destinationMeal
+                      }
                       type="button"
                       aria-label={
-                        !food.planEligible
+                        addDisabled
+                          ? `Wait for the current meal preference change before adding ${food.name}`
+                          : !food.planEligible
                           ? `${food.name} needs review`
                           : destinationMeal
                             ? `Add ${food.name} to ${destinationMeal}`
@@ -1010,7 +1018,9 @@ export function FoodSearchPicker({
                         if (destinationMeal) onAdd(destinationMeal, food);
                       }}
                     >
-                      {!food.planEligible
+                      {addDisabled
+                        ? "Saving preference…"
+                        : !food.planEligible
                         ? "Needs review"
                         : destinationMeal
                           ? `Add to ${mealLabels[destinationMeal]}`
@@ -1191,7 +1201,11 @@ export function FoodSearchPicker({
           {!isSearching && rankedResults.length === 0 ? (
             <div className={styles.emptyState}>
               <strong>No matching saved or source-reported food yet.</strong>
-              <p>Try fewer words, check the spelling, or add the package label below.</p>
+              <p>
+                {showLabelUploadFallback
+                  ? "Try fewer words, check the spelling, or add the package label below."
+                  : "Try fewer words or check the spelling. You can add a private label food from Settings."}
+              </p>
             </div>
           ) : null}
           {rankedResults.length > INITIAL_RESULT_COUNT ? (
@@ -1218,18 +1232,20 @@ export function FoodSearchPicker({
         </div>
       </section>
 
-      <details className={styles.labelFallback}>
+      {showLabelUploadFallback ? <details className={styles.labelFallback}>
         <summary>
           <strong>Product not found? Add package-label photos</strong>
-          <span>Create a private, manually confirmed food for your plan.</span>
+          <span>Read the label privately, then review and confirm every fact.</span>
         </summary>
         <div className={styles.labelFallbackBody}>
           <p>
-            Start with a clear package photo, then copy the printed serving and
-            nutrition facts yourself. The app does not guess facts from the image.
-            The original upload is not retained as-is; server-re-encoded evidence
-            stays private and is never shared. Reusable nutrition facts remain
-            review-gated.
+            Start with a clear package photo. A private on-device reader suggests
+            only clearly labeled, high-confidence printed facts; compare every
+            suggestion, correct any mismatch, and complete unreadable blanks
+            yourself. The photo stays on this device during recognition. After
+            your explicit confirmation, the original upload is not retained as-is;
+            server-re-encoded evidence stays private and is never shared. Reusable
+            nutrition facts remain review-gated.
           </p>
           <FoodLabelUpload
             onCreated={async (_foodId, displayName) => {
@@ -1238,7 +1254,7 @@ export function FoodSearchPicker({
             }}
           />
         </div>
-      </details>
+      </details> : null}
     </section>
   );
 }
