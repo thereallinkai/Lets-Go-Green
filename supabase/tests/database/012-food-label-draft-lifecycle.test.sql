@@ -375,8 +375,10 @@ select is(
 );
 
 reset role;
+select set_config('storage.allow_delete_query', 'true', true);
 delete from storage.objects
 where id = 'a6400000-0000-4000-8000-000000000001';
+select set_config('storage.allow_delete_query', 'false', true);
 set local role service_role;
 
 select is(

@@ -570,6 +570,25 @@ values (
   'active'
 );
 
+insert into public.food_sources (
+  id,
+  food_id,
+  provider,
+  external_id,
+  source_version,
+  attribution_text,
+  payload_sha256
+)
+values (
+  'e1100000-0000-4000-8000-000000000001',
+  'e1000000-0000-4000-8000-000000000001',
+  'user_label',
+  'private-owner-label-fixture',
+  'database-test-v1',
+  'Account-confirmed package label fixture.',
+  repeat('e', 64)
+);
+
 insert into public.food_nutrition (
   food_id,
   measurement_basis,
@@ -582,7 +601,8 @@ insert into public.food_nutrition (
   fat_g,
   source_name,
   source_reference,
-  verification_status
+  verification_status,
+  source_id
 )
 values (
   'e1000000-0000-4000-8000-000000000001',
@@ -596,7 +616,8 @@ values (
   2,
   'Account-confirmed package label',
   'Private fixture nutrition label',
-  'user_label'
+  'user_label',
+  'e1100000-0000-4000-8000-000000000001'
 );
 
 insert into public.food_safety_metadata (

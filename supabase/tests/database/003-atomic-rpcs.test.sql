@@ -666,9 +666,9 @@ select throws_ok(
       0
     )
   $$,
-  '23514',
-  'new row for relation "meal_preferences" violates check constraint "meal_preferences_primary_meal_type_check"',
-  'onboarding preferences reject optional snack meal types'
+  '42501',
+  'permission denied for table meal_preferences',
+  'authenticated clients cannot bypass primary-meal RPC validation with an optional snack'
 );
 
 select lives_ok(
