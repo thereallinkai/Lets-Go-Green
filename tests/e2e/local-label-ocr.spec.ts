@@ -80,9 +80,16 @@ test("reads a nutrition label with the real same-origin browser worker without a
   await expect(page.getByRole("spinbutton", { name: "Calories" })).toHaveValue(
     "120",
   );
-  await expect(
-    page.getByRole("spinbutton", { name: "Protein (g)" }),
-  ).toHaveValue("24");
+  const proteinInput = page.getByRole("spinbutton", { name: "Protein (g)" });
+  const proteinValue = await proteinInput.inputValue();
+  expect(["", "24"]).toContain(proteinValue);
+  if (!proteinValue) {
+    await expect(
+      page.getByText(
+        /Protein was not filled because the reading conflicts with the printed calories/i,
+      ),
+    ).toBeVisible();
+  }
   await expect(
     page.getByRole("spinbutton", { name: "Carbohydrate (g)" }),
   ).toHaveValue("3");

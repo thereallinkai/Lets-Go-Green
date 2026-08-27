@@ -363,11 +363,11 @@ function allergenCandidate(line: FoodLabelOcrLine) {
 
 const allergenPatterns: Record<string, RegExp> = {
   milk: /\b(?:milk|dairy|whey|casein|caseinate|lactalbumin)\b/i,
-  egg: /\b(?:egg|albumen|ovalbumin)\b/i,
+  egg: /\b(?:eggs?|albumen|ovalbumin)\b/i,
   fish: /\b(?:fish|anchov(?:y|ies)|cod|salmon|tuna)\b/i,
   shellfish: /\b(?:shellfish|shrimp|prawn|crab|lobster|crayfish)\b/i,
   "tree-nuts":
-    /\b(?:tree nuts?|almond|cashew|walnut|pecan|pistachio|hazelnut|macadamia|brazil nut)\b/i,
+    /\b(?:tree[- ]?nuts?|almonds?|cashews?|walnuts?|pecans?|pistachios?|hazelnuts?|macadamias?|brazil[- ]?nuts?)\b/i,
   peanuts: /\bpeanuts?\b/i,
   wheat: /\b(?:wheat|spelt|semolina|durum)\b/i,
   soy: /\b(?:soy|soya)\b/i,
@@ -407,6 +407,41 @@ function removePhysicallyImpossibleValues(result: FoodLabelOcrResult) {
     delete result.evidenceByField[field];
     result.warnings.push(
       `${foodLabelOcrFieldLabels[field]} was not filled because the reading conflicts with the printed serving weight. Check the photo and enter the printed value yourself.`,
+    );
+  }
+}
+
+function removeGrosslyCalorieInconsistentValues(result: FoodLabelOcrResult) {
+  const calories = result.values.calories;
+  if (typeof calories !== "number") return;
+
+  // Nutrition-label rounding and alternative energy factors can create small
+  // differences. This deliberately generous ceiling catches only a single
+  // macro reading that could not plausibly fit within the printed calories.
+  // It is especially useful when OCR mistakes a trailing unit for a digit and
+  // no serving weight was read for the separate mass-conservation check.
+  const maximumPlausibleContribution = Math.max(
+    calories * 2,
+    calories + 50,
+  );
+  const macroFields: Array<[FoodLabelOcrField, number]> = [
+    ["proteinGrams", 4],
+    ["fatGrams", 9],
+  ];
+
+  for (const [field, caloriesPerGram] of macroFields) {
+    const value = result.values[field];
+    if (
+      typeof value !== "number" ||
+      value * caloriesPerGram <= maximumPlausibleContribution
+    ) {
+      continue;
+    }
+    delete result.values[field];
+    delete result.confidenceByField[field];
+    delete result.evidenceByField[field];
+    result.warnings.push(
+      `${foodLabelOcrFieldLabels[field]} was not filled because the reading conflicts with the printed calories. Check the photo and enter the printed value yourself.`,
     );
   }
 }
@@ -542,6 +577,7 @@ export function parseFoodLabelOcr(
   }
 
   removePhysicallyImpossibleValues(result);
+  removeGrosslyCalorieInconsistentValues(result);
 
   result.unreadableRequiredFields = requiredFields.flatMap((field) =>
     result.values[field] === undefined ? [foodLabelOcrFieldLabels[field]] : [],

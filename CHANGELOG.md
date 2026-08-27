@@ -30,7 +30,9 @@ on-device assistance for reading package nutrition labels.
   count, downscaled working image, timeout, cancellation, and one active worker.
   Replacing a photo or retrying cannot leave stale suggested facts or a
   confirmation checked, while manual input survives an empty or unreadable
-  recognition result.
+  recognition result. Grossly calorie-inconsistent macro readings are also
+  left blank for manual review when a misread unit or missing serving weight
+  prevents the ordinary mass check.
 - Exposed **Record food** or **Manage recorded foods** for breakfast, lunch,
   dinner, and all three snack spaces. Today now separates accepted-plan detail
   from foods recorded today, discloses that recording a food marks that slot

@@ -155,6 +155,29 @@ describe("parseFoodLabelOcr", () => {
     expect(result.warnings.join(" ")).toMatch(/conflicts with the printed serving weight/i);
   });
 
+  it("omits a grossly calorie-inconsistent macro when serving weight is unreadable", () => {
+    const result = parseFoodLabelOcr(
+      [
+        line("Calories 120"),
+        line("Total Fat 2g"),
+        line("Total Carbohydrate 3g"),
+        line("Protein 249g"),
+      ],
+      90,
+    );
+
+    expect(result.values.calories).toBe(120);
+    expect(result.values.fatGrams).toBe(2);
+    expect(result.values.carbohydrateGrams).toBe(3);
+    expect(result.values.proteinGrams).toBeUndefined();
+    expect(result.confidenceByField.proteinGrams).toBeUndefined();
+    expect(result.evidenceByField.proteinGrams).toBeUndefined();
+    expect(result.unreadableRequiredFields).toContain("Protein");
+    expect(result.warnings.join(" ")).toMatch(
+      /Protein was not filled because the reading conflicts with the printed calories/i,
+    );
+  });
+
   it("accepts only an explicit allergen statement and never treats an ingredient percentage as one", () => {
     const result = parseFoodLabelOcr(
       [
@@ -196,6 +219,15 @@ describe("parseFoodLabelOcr", () => {
     );
 
     expect(result.allergenSuggestions).toEqual(["soy"]);
+  });
+
+  it("suggests plural egg and tree-nut names from explicit package statements", () => {
+    const result = parseFoodLabelOcr(
+      [line("Contains: Eggs, almonds, cashews, and Brazil nuts.")],
+      92,
+    );
+
+    expect(result.allergenSuggestions).toEqual(["egg", "tree-nuts"]);
   });
 
   it("stops ingredient continuation before sparse-text nutrition and identity lines", () => {
