@@ -49,11 +49,11 @@ const foodLabelObjectSchema = z
 
 const allergenAliases: Record<string, RegExp> = {
   milk: /\b(?:milk|dairy|whey|casein|caseinate|lactalbumin)\b/i,
-  egg: /\b(?:egg|albumen|ovalbumin)\b/i,
+  egg: /\b(?:eggs?|albumen|ovalbumin)\b/i,
   fish: /\b(?:fish|anchov(?:y|ies)|cod|salmon|tuna)\b/i,
   shellfish: /\b(?:shellfish|shrimp|prawn|crab|lobster|crayfish)\b/i,
   "tree-nuts":
-    /\b(?:tree nuts?|almond|cashew|walnut|pecan|pistachio|hazelnut|macadamia|brazil nut)\b/i,
+    /\b(?:tree[- ]?nuts?|almonds?|cashews?|walnuts?|pecans?|pistachios?|hazelnuts?|macadamias?|brazil[- ]?nuts?)\b/i,
   peanuts: /\bpeanuts?\b/i,
   wheat: /\b(?:wheat|spelt|semolina|durum)\b/i,
   soy: /\b(?:soy|soya)\b/i,
@@ -61,7 +61,7 @@ const allergenAliases: Record<string, RegExp> = {
 };
 
 const allergenNegativeAlias =
-  "(?:milk|dairy|whey|casein|caseinate|lactalbumin|eggs?|albumen|ovalbumin|fish|anchov(?:y|ies)|cod|salmon|tuna|shellfish|shrimp|prawn|crab|lobster|crayfish|tree[- ]?nuts?|almond|cashew|walnut|pecan|pistachio|hazelnut|macadamia|brazil nut|peanuts?|wheat|spelt|semolina|durum|soy|soya|sesame)";
+  "(?:milk|dairy|whey|casein|caseinate|lactalbumin|eggs?|albumen|ovalbumin|fish|anchov(?:y|ies)|cod|salmon|tuna|shellfish|shrimp|prawn|crab|lobster|crayfish|tree[- ]?nuts?|almonds?|cashews?|walnuts?|pecans?|pistachios?|hazelnuts?|macadamias?|brazil[- ]?nuts?|peanuts?|wheat|spelt|semolina|durum|soy|soya|sesame)";
 
 export function removeNegatedAllergenMentions(statement: string) {
   return statement

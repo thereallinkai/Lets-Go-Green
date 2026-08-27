@@ -71,6 +71,31 @@ describe("food label input", () => {
     ).toBe(false);
   });
 
+  it("maps plural egg and tree-nut names before the database boundary", () => {
+    const missingSelections = foodLabelDataSchema.safeParse({
+      ...whey,
+      allergenStatement: "Contains eggs and almonds.",
+      allergenSlugs: [],
+    });
+
+    expect(missingSelections.success).toBe(false);
+    if (!missingSelections.success) {
+      expect(missingSelections.error.issues.map((issue) => issue.message)).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("egg"),
+          expect.stringContaining("tree-nuts"),
+        ]),
+      );
+    }
+    expect(
+      foodLabelDataSchema.safeParse({
+        ...whey,
+        allergenStatement: "Contains eggs and almonds.",
+        allergenSlugs: ["egg", "tree-nuts"],
+      }).success,
+    ).toBe(true);
+  });
+
   it("does not turn explicitly negated named allergens into required selections", () => {
     expect(
       foodLabelDataSchema.safeParse({
@@ -86,6 +111,13 @@ describe("food label input", () => {
         allergenSlugs: [],
       }).success,
     ).toBe(false);
+    expect(
+      foodLabelDataSchema.safeParse({
+        ...whey,
+        allergenStatement: "Egg-free. Free from almonds and cashews.",
+        allergenSlugs: [],
+      }).success,
+    ).toBe(true);
   });
 
   it("requires explicit allergen and restriction review at confirmation", () => {

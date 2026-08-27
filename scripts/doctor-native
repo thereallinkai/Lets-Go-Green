@@ -25,16 +25,23 @@ warn() {
 
 printf "Let's Go Green! native-host doctor\n\n"
 
+EXPECTED_NODE="$(tr -d '[:space:]' < .nvmrc 2>/dev/null || true)"
+NODE_VERSION_PIN="$(tr -d '[:space:]' < .node-version 2>/dev/null || true)"
+NODE_PINS_MATCH=false
+if [[ -n "$EXPECTED_NODE" && "$EXPECTED_NODE" == "$NODE_VERSION_PIN" ]]; then
+  NODE_PINS_MATCH=true
+else
+  fail ".nvmrc and .node-version must record the same exact Node.js version."
+fi
+
 if command -v node >/dev/null 2>&1; then
   ACTUAL_NODE="$(node -p 'process.versions.node')"
-  if [[ "${ACTUAL_NODE%%.*}" == "22" ]]; then
-    pass "Node.js ${ACTUAL_NODE} satisfies the supported Node 22 line."
-    EXPECTED_NODE="$(tr -d '[:space:]' < .nvmrc)"
-    if [[ "$ACTUAL_NODE" != "$EXPECTED_NODE" ]]; then
-      warn "The reproducible CI version is ${EXPECTED_NODE}; run 'nvm install && nvm use' before a release check."
-    fi
+  if [[ "$NODE_PINS_MATCH" == true && "$ACTUAL_NODE" == "$EXPECTED_NODE" ]]; then
+    pass "Node.js ${ACTUAL_NODE} matches .nvmrc and .node-version."
+  elif [[ "$NODE_PINS_MATCH" == true ]]; then
+    fail "Node.js ${EXPECTED_NODE} is required; found ${ACTUAL_NODE}. Run 'nvm install && nvm use'."
   else
-    fail "Node.js 22 is required; found ${ACTUAL_NODE}."
+    fail "Node.js ${ACTUAL_NODE} cannot be verified until the repository version pins agree."
   fi
 else
   fail "Node.js is missing. Install the version recorded in .nvmrc."
@@ -42,11 +49,23 @@ fi
 
 if command -v npm >/dev/null 2>&1; then
   ACTUAL_NPM="$(npm --version)"
-  EXPECTED_NPM="$(node -p "require('./package.json').packageManager.replace(/^npm@/, '')" 2>/dev/null || true)"
-  if [[ -n "$EXPECTED_NPM" && "$ACTUAL_NPM" == "$EXPECTED_NPM" ]]; then
+  EXPECTED_NPM=""
+  if command -v node >/dev/null 2>&1; then
+    EXPECTED_NPM="$(
+      node -p '
+        const value = require("./package.json").packageManager;
+        const match = typeof value === "string" ? /^npm@(\d+\.\d+\.\d+)$/.exec(value) : null;
+        match?.[1] ?? "";
+      ' 2>/dev/null || true
+    )"
+  fi
+
+  if [[ -z "$EXPECTED_NPM" ]]; then
+    fail "package.json must record an exact npm packageManager such as npm@10.9.8."
+  elif [[ "$ACTUAL_NPM" == "$EXPECTED_NPM" ]]; then
     pass "npm ${ACTUAL_NPM} matches package.json."
   else
-    fail "npm ${EXPECTED_NPM:-10.9.8} is required; found ${ACTUAL_NPM}."
+    fail "npm ${EXPECTED_NPM} is required; found ${ACTUAL_NPM}. Install the packageManager version recorded in package.json."
   fi
 else
   fail "npm is missing."

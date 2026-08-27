@@ -164,7 +164,7 @@ The initial time zone comes from the browser's standard device time-zone setting
 
 | Path | Host requirements | Intended use |
 | --- | --- | --- |
-| Native macOS or Linux | Git, Node.js 22, and npm 10.9.8 | No-container UI, OCR, unit/component, build, and mock browser testing |
+| Native macOS or Linux | Git, Node.js 22.23.1, and npm 10.9.8 | No-container UI, OCR, unit/component, build, and mock browser testing |
 | Native host + hosted Supabase | The native tools above and an isolated Supabase development project | Full accounts, database, storage, and hosted email testing without Docker |
 | GitHub Codespaces | A browser and GitHub access | Optional zero-local-install full-stack path |
 | VS Code Dev Container | Git, VS Code, a compatible Docker runtime, and the Dev Containers extension | Optional reproducible full-stack path |
@@ -196,7 +196,9 @@ npm run doctor:native
 
 The native doctor requires the health endpoint to report the isolated mock
 contract (`ready`, database `not_configured`, provider `mock`). It fails if a
-stale full-stack or real-provider process is already occupying the port.
+stale full-stack or real-provider process is already occupying the port. Both
+native commands stop early unless Node.js matches `.nvmrc` and `.node-version`
+exactly and npm matches the exact `packageManager` value.
 
 `dev:native` deliberately overrides any old local-Supabase values and starts a
 credential-free mock UI. It supports the complete visual system, navigation,

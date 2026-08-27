@@ -10,9 +10,32 @@ fail() {
 }
 
 command -v node >/dev/null 2>&1 \
-  || fail "Node.js 22 is required. Install the version in .nvmrc, then retry."
+  || fail "Node.js is required. Install the exact version in .nvmrc, then retry."
 command -v npm >/dev/null 2>&1 \
   || fail "npm is required. Install the version recorded in package.json, then retry."
+
+EXPECTED_NODE="$(tr -d '[:space:]' < .nvmrc 2>/dev/null || true)"
+NODE_VERSION_PIN="$(tr -d '[:space:]' < .node-version 2>/dev/null || true)"
+[[ -n "$EXPECTED_NODE" && "$EXPECTED_NODE" == "$NODE_VERSION_PIN" ]] \
+  || fail ".nvmrc and .node-version must record the same exact Node.js version."
+
+ACTUAL_NODE="$(node -p 'process.versions.node')"
+[[ "$ACTUAL_NODE" == "$EXPECTED_NODE" ]] \
+  || fail "Node.js ${EXPECTED_NODE} is required; found ${ACTUAL_NODE}. Run 'nvm install && nvm use', then retry."
+
+EXPECTED_NPM="$(
+  node -p '
+    const value = require("./package.json").packageManager;
+    const match = typeof value === "string" ? /^npm@(\d+\.\d+\.\d+)$/.exec(value) : null;
+    match?.[1] ?? "";
+  ' 2>/dev/null || true
+)"
+[[ -n "$EXPECTED_NPM" ]] \
+  || fail "package.json must record an exact npm packageManager such as npm@10.9.8."
+
+ACTUAL_NPM="$(npm --version)"
+[[ "$ACTUAL_NPM" == "$EXPECTED_NPM" ]] \
+  || fail "npm ${EXPECTED_NPM} is required; found ${ACTUAL_NPM}. Install the packageManager version recorded in package.json, then retry."
 
 DEPENDENCIES_READY=false
 if [[ -x node_modules/.bin/next ]] \

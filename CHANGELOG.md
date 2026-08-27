@@ -44,16 +44,26 @@ on-device assistance for reading package nutrition labels.
   and retry states for preference mutations and local label reading, updated
   container/bootstrap preparation for the pinned OCR assets, and expanded
   component, route, parser, accessibility, responsive, and end-to-end checks.
+- Hardened unfinished package-label drafts with atomic owner-scoped creation,
+  exact replay protection, database-enforced active and rolling limits, and an
+  idempotent server-only discard. Discarded private-photo paths remain in a
+  trusted cleanup queue until deletion succeeds; package-label visits retry
+  pending work without delaying the label list response.
+- Made the credential-free native start and doctor require the repository's
+  exact Node.js and npm versions before installing dependencies or launching,
+  so the no-Docker path matches the release toolchain instead of accepting a
+  nearby runtime silently.
 
-The database migration in this release adds an owner-scoped, serialized
-`append_meal_preference` RPC, enforces the 50-choice-per-primary-meal bound,
-validates plan eligibility inside the transaction, and revokes authenticated
-direct inserts or updates that could bypass those checks. Existing preference,
+The database migration in this release adds owner-scoped, serialized meal-
+preference and label-draft creation RPCs, enforces their limits inside the
+transaction, validates plan eligibility and package facts, and revokes direct
+writes that could bypass those checks. It also preserves a trusted draft-
+creation ledger, adds a durable discard-cleanup queue, and restricts discard
+and cleanup operations to the service-role boundary. Existing preference,
 profile, accepted-plan, daily-log, and private-label rows are preserved;
 owner-scoped selection and one-item removal remain available. The migration
-also layers the Beta 6 health contract over the prior health checks. The OCR
-feature adds no OCR-result table, external OCR recipient, or new photo-retention
-path.
+layers the Beta 6 health contract over the prior health checks. The OCR feature
+adds no OCR-result table, external OCR recipient, or new photo-retention path.
 
 ## 1.0.0-beta.5 — 2026-08-13
 

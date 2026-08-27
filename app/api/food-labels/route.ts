@@ -1,8 +1,11 @@
 import { z } from "zod";
+import { after } from "next/server";
 import { apiError, apiSuccess } from "@/src/lib/api-response";
 import { isAuthSessionMissing } from "@/src/lib/auth-error-taxonomy";
 import { foodLabelDataSchema } from "@/src/lib/domain/food-label";
 import { isDevelopmentDemo } from "@/src/lib/env";
+import { retryPendingFoodLabelObjectCleanup } from "@/src/lib/food-label-object-cleanup";
+import { createSupabaseAdminClient } from "@/src/lib/supabase/admin";
 import { createSupabaseServerClient } from "@/src/lib/supabase/server";
 
 const createDraftRequestSchema = z
@@ -135,6 +138,14 @@ export async function GET() {
         action: { kind: "navigate", label: "Log in", href: "/login" },
       });
     }
+    after(async () => {
+      try {
+        const admin = createSupabaseAdminClient();
+        await retryPendingFoodLabelObjectCleanup(admin, auth.user.id);
+      } catch {
+        console.error("food label cleanup retry could not start");
+      }
+    });
     const { data, error } = await supabase
       .from("food_label_submissions")
       .select(

@@ -498,7 +498,7 @@ export function SettingsView({
       setStatus({
         kind: "success",
         text: result.cleanupPending
-          ? "Draft discarded. Private-photo cleanup is queued and will retry automatically."
+          ? "Draft discarded. Private-photo cleanup is queued and will retry when you return to package-label tools."
           : "Draft and its private photos were discarded.",
       });
       setPending(null);
