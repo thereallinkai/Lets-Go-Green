@@ -3,6 +3,11 @@ import { apiError, apiSuccess } from "@/src/lib/api-response";
 import { isAuthSessionMissing } from "@/src/lib/auth-error-taxonomy";
 import { confirmedFoodLabelDataSchema } from "@/src/lib/domain/food-label";
 import { isDevelopmentDemo } from "@/src/lib/env";
+import {
+  retryPendingFoodLabelObjectCleanup,
+  trustedFoodLabelRpc,
+} from "@/src/lib/food-label-object-cleanup";
+import { createSupabaseAdminClient } from "@/src/lib/supabase/admin";
 import { createSupabaseServerClient } from "@/src/lib/supabase/server";
 
 const requestSchema = z
@@ -216,6 +221,156 @@ export async function POST(
           "The draft and private photo remain saved. Check the connection and retry confirmation.",
         retryable: true,
         action: { kind: "retry", label: "Retry confirmation" },
+      },
+    );
+  }
+}
+
+type DiscardResult = {
+  discarded: boolean;
+  already_absent: boolean;
+  cleanup_queued: number;
+};
+
+export async function DELETE(
+  _request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  const { id } = await context.params;
+  if (!z.string().uuid().safeParse(id).success) {
+    return apiError("INVALID_LABEL_ID", "The label draft ID is invalid.", 422, {
+      details: "No draft or private photo was changed.",
+      retryable: false,
+      action: { kind: "edit", label: "Refresh label drafts" },
+    });
+  }
+  if (isDevelopmentDemo()) {
+    return apiSuccess({
+      discarded: true,
+      alreadyAbsent: true,
+      cleanupPending: false,
+      persisted: false,
+    });
+  }
+
+  try {
+    const supabase = await createSupabaseServerClient();
+    const { data: auth, error: authError } = await supabase.auth.getUser();
+    if (authError && !isAuthSessionMissing(authError)) {
+      return apiError(
+        "LABEL_AUTH_UNAVAILABLE",
+        "Your session could not be checked before discarding this draft.",
+        503,
+        {
+          details: "The draft and private photos are unchanged. Retry shortly.",
+          retryable: true,
+          action: { kind: "retry", label: "Retry discard" },
+        },
+      );
+    }
+    if (!auth.user || isAuthSessionMissing(authError)) {
+      return apiError("SESSION_EXPIRED", "Log in before discarding a draft.", 401, {
+        details: "The draft and private photos are unchanged.",
+        retryable: false,
+        action: { kind: "navigate", label: "Log in", href: "/login" },
+      });
+    }
+
+    const admin = createSupabaseAdminClient();
+    const result = await trustedFoodLabelRpc(admin)(
+      "discard_food_label_draft",
+      {
+        target_user_id: auth.user.id,
+        target_submission_id: id,
+      },
+    );
+    const discarded = Array.isArray(result.data)
+      ? (result.data[0] as DiscardResult | undefined)
+      : undefined;
+    if (result.error || !discarded?.discarded) {
+      if (result.error?.message === "LABEL_DRAFT_UPLOAD_IN_PROGRESS") {
+        return apiError(
+          "LABEL_DRAFT_UPLOAD_IN_PROGRESS",
+          "A private label photo is still being saved.",
+          409,
+          {
+            details:
+              "Nothing was discarded. Wait for the current upload to finish, then retry.",
+            retryable: true,
+            action: { kind: "wait", label: "Wait, then retry discard" },
+          },
+        );
+      }
+      if (result.error?.message === "LABEL_DRAFT_NOT_DISCARDABLE") {
+        return apiError(
+          "LABEL_DRAFT_NOT_DISCARDABLE",
+          "This label is no longer an editable draft.",
+          409,
+          {
+            details:
+              "No label or photo was removed. Refresh the list to see its current status.",
+            retryable: false,
+            action: { kind: "edit", label: "Refresh label drafts" },
+          },
+        );
+      }
+      if (
+        result.error?.message === "LABEL_DRAFT_DISCARD_CONFLICT" ||
+        result.error?.code === "40001" ||
+        result.error?.code === "40P01"
+      ) {
+        return apiError(
+          "LABEL_DRAFT_DISCARD_CONFLICT",
+          "The draft changed while it was being discarded.",
+          409,
+          {
+            details: "Refresh the list once, then retry if the draft remains.",
+            retryable: true,
+            action: { kind: "retry", label: "Retry discard" },
+          },
+        );
+      }
+      console.error("food label draft discard failed", {
+        code: result.error?.code,
+      });
+      return apiError(
+        "LABEL_DRAFT_DISCARD_FAILED",
+        "The private label draft could not be discarded.",
+        503,
+        {
+          details: "The draft and private photos are unchanged. Retry shortly.",
+          retryable: true,
+          action: { kind: "retry", label: "Retry discard" },
+        },
+      );
+    }
+
+    let cleanupComplete = false;
+    try {
+      cleanupComplete = await retryPendingFoodLabelObjectCleanup(
+        admin,
+        auth.user.id,
+      );
+    } catch {
+      console.error("food label discard cleanup retry failed");
+    }
+
+    return apiSuccess({
+      discarded: true,
+      alreadyAbsent: discarded.already_absent,
+      cleanupPending: !cleanupComplete,
+      persisted: true,
+    });
+  } catch {
+    return apiError(
+      "SERVICE_UNAVAILABLE",
+      "Label-draft services are temporarily unavailable.",
+      503,
+      {
+        details:
+          "The discard request may be safely retried; repeated successful requests do not remove anything else.",
+        retryable: true,
+        action: { kind: "retry", label: "Retry discard" },
       },
     );
   }

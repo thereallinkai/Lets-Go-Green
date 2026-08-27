@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -15,6 +15,7 @@ import { AppReleaseCard } from "@/components/app-release-card";
 import { ApiErrorNotice } from "@/components/api-error-notice";
 import { AppearanceControl } from "@/components/appearance-control";
 import { FoodLabelUpload } from "@/components/food-label-upload";
+import { MealPreferenceEditor } from "@/components/meal-preference-editor";
 import {
   apiErrorFromPayload,
   clientApiError,
@@ -56,6 +57,14 @@ export type SettingsInitialData = {
     sortOrder: number;
   }>;
   privateLabelFoods: PrivateLabelFood[];
+  activeLabelDrafts: Array<{
+    id: string;
+    status: "draft" | "needs_changes";
+    brandName: string;
+    productName: string;
+    variantName: string | null;
+    createdAt: string;
+  }>;
   aiProviderMode: "mock" | "openai" | "unavailable";
   loadError: string | null;
 };
@@ -88,6 +97,7 @@ type PendingAction =
   | "preferences"
   | "export"
   | "logout"
+  | "label-draft"
   | null;
 
 type StatusMessage = {
@@ -120,12 +130,6 @@ const goalLabels: Record<SettingsGoalType, string> = {
   body_recomposition: "Body recomposition",
 };
 
-const mealLabels = {
-  breakfast: "Breakfast",
-  lunch: "Lunch",
-  dinner: "Dinner",
-} as const;
-
 function splitList(value: string) {
   const seen = new Set<string>();
   return value
@@ -140,6 +144,15 @@ function splitList(value: string) {
     });
 }
 
+function formatLabelDraftDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Date unavailable";
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeZone: "UTC",
+  }).format(date);
+}
+
 async function updateSettings(body: unknown) {
   const response = await fetch("/api/settings", {
     method: "PATCH",
@@ -150,12 +163,27 @@ async function updateSettings(body: unknown) {
     data: SaveResult | null;
     error: { message: string } | null;
   } | null;
-  if (!response.ok || !payload?.data) {
+  const requestedSection =
+    body && typeof body === "object" && !Array.isArray(body)
+      ? (body as { section?: unknown }).section
+      : null;
+  const result = payload?.data;
+  const validResult =
+    result !== null &&
+    typeof result === "object" &&
+    result.saved === true &&
+    typeof result.persisted === "boolean" &&
+    result.section === requestedSection &&
+    (result.displayMetadataUpdated === undefined ||
+      typeof result.displayMetadataUpdated === "boolean");
+  if (!response.ok || !validResult) {
     throw new Error(
-      payload?.error?.message ?? "Settings could not be saved.",
+      !response.ok && payload?.error?.message
+        ? payload.error.message
+        : "The settings service returned an incomplete save confirmation. Your edits remain on this page, but account storage could not be confirmed; retry before leaving this page.",
     );
   }
-  return payload.data;
+  return result;
 }
 
 export function SettingsView({
@@ -190,9 +218,36 @@ export function SettingsView({
   const [safetyContext, setSafetyContext] = useState(
     initialData.profile.safetyContext,
   );
+  const [noAllergies, setNoAllergies] = useState(
+    initialData.profile.allergies.length === 0,
+  );
+  const [noDietaryRestrictions, setNoDietaryRestrictions] = useState(
+    initialData.profile.dietaryRestrictions.length === 0,
+  );
+  const [noDislikedFoods, setNoDislikedFoods] = useState(
+    initialData.profile.dislikedFoods.length === 0,
+  );
+  const [noSafetyContext, setNoSafetyContext] = useState(
+    initialData.profile.safetyContext.trim().length === 0,
+  );
   const privateLabelFoods = initialData.privateLabelFoods;
+  const [activeLabelDrafts, setActiveLabelDrafts] = useState(
+    initialData.activeLabelDrafts,
+  );
+  const [confirmDiscardId, setConfirmDiscardId] = useState<string | null>(null);
+  const [discardError, setDiscardError] = useState<ApiError | null>(null);
+  const [labelCatalogAdditions, setLabelCatalogAdditions] = useState<
+    Array<{ foodId: string; foodName: string }>
+  >([]);
   const isDemo = initialData.mode === "demo";
   const savingBlocked = Boolean(initialData.loadError);
+
+  useEffect(() => {
+    if (window.location.hash !== "#preferences") return;
+    window.requestAnimationFrame(() => {
+      document.getElementById("preferences")?.focus();
+    });
+  }, []);
 
   function successMessage(persisted: boolean, authenticatedText: string) {
     return persisted
@@ -283,15 +338,31 @@ export function SettingsView({
     if (savingBlocked) return;
     setPending("preferences");
     setStatus(null);
+    const allergyItems = noAllergies ? [] : splitList(allergies);
+    const restrictionItems = noDietaryRestrictions
+      ? []
+      : splitList(dietaryRestrictions);
+    const dislikedItems = noDislikedFoods ? [] : splitList(dislikedFoods);
+    const normalizedSafetyContext = noSafetyContext
+      ? ""
+      : safetyContext.trim();
     try {
       const result = await updateSettings({
         section: "preferences",
-        allergies: splitList(allergies),
-        dietaryRestrictions: splitList(dietaryRestrictions),
-        dislikedFoods: splitList(dislikedFoods),
+        allergies: allergyItems,
+        dietaryRestrictions: restrictionItems,
+        dislikedFoods: dislikedItems,
         trainingDaysPerWeek,
-        safetyContext,
+        safetyContext: normalizedSafetyContext,
       });
+      setAllergies(allergyItems.join(", "));
+      setDietaryRestrictions(restrictionItems.join(", "));
+      setDislikedFoods(dislikedItems.join(", "));
+      setSafetyContext(normalizedSafetyContext);
+      setNoAllergies(allergyItems.length === 0);
+      setNoDietaryRestrictions(restrictionItems.length === 0);
+      setNoDislikedFoods(dislikedItems.length === 0);
+      setNoSafetyContext(normalizedSafetyContext.length === 0);
       setStatus({
         kind: "success",
         text: successMessage(
@@ -387,6 +458,112 @@ export function SettingsView({
     } catch {
       setLogoutError(fallback);
       setPending(null);
+    }
+  }
+
+  async function discardLabelDraft(draftId: string) {
+    setPending("label-draft");
+    setDiscardError(null);
+    const fallback = clientApiError(
+      "LABEL_DRAFT_DISCARD_UNAVAILABLE",
+      "The private label draft could not be discarded.",
+      "The request is safe to retry. An already-discarded draft is treated as success.",
+      {
+        retryable: true,
+        action: { kind: "retry", label: "Retry discard" },
+      },
+    );
+    try {
+      const response = await fetch(`/api/food-labels/${draftId}`, {
+        method: "DELETE",
+      });
+      const payload = await response.json().catch(() => null);
+      const result = payload?.data;
+      const validResult =
+        result !== null &&
+        typeof result === "object" &&
+        result.discarded === true &&
+        typeof result.alreadyAbsent === "boolean" &&
+        typeof result.cleanupPending === "boolean" &&
+        result.persisted === !isDemo;
+      if (!response.ok || !validResult) {
+        setDiscardError(apiErrorFromPayload(payload, fallback));
+        setPending(null);
+        return;
+      }
+      setActiveLabelDrafts((drafts) =>
+        drafts.filter((draft) => draft.id !== draftId),
+      );
+      setConfirmDiscardId(null);
+      setStatus({
+        kind: "success",
+        text: result.cleanupPending
+          ? "Draft discarded. Private-photo cleanup is queued and will retry when you return to package-label tools."
+          : "Draft and its private photos were discarded.",
+      });
+      setPending(null);
+      router.refresh();
+    } catch {
+      setDiscardError(fallback);
+      setPending(null);
+    }
+  }
+
+  async function refreshPrivateLabelState(foodId: string, displayName: string) {
+    try {
+      const draftsResponse = await fetch("/api/food-labels", {
+        cache: "no-store",
+      });
+      const draftsPayload = await draftsResponse.json().catch(() => null);
+      const savedFoodConfirmed =
+        draftsResponse.ok &&
+        Array.isArray(draftsPayload?.data) &&
+        draftsPayload.data.some(
+          (draft: { private_food_id?: unknown }) =>
+            draft?.private_food_id === foodId,
+        );
+      if (!savedFoodConfirmed || !draftsResponse.ok) return false;
+      if (!Array.isArray(draftsPayload?.data)) return false;
+
+      setActiveLabelDrafts(
+        draftsPayload.data.flatMap(
+          (draft: {
+            id?: unknown;
+            status?: unknown;
+            brand_name?: unknown;
+            product_name?: unknown;
+            variant_name?: unknown;
+            created_at?: unknown;
+          }) =>
+            (draft.status === "draft" || draft.status === "needs_changes") &&
+            typeof draft.id === "string" &&
+            typeof draft.brand_name === "string" &&
+            typeof draft.product_name === "string" &&
+            typeof draft.created_at === "string"
+              ? [
+                  {
+                    id: draft.id,
+                    status: draft.status,
+                    brandName: draft.brand_name,
+                    productName: draft.product_name,
+                    variantName:
+                      typeof draft.variant_name === "string"
+                        ? draft.variant_name
+                        : null,
+                    createdAt: draft.created_at,
+                  },
+                ]
+              : [],
+        ),
+      );
+      setLabelCatalogAdditions((current) => [
+        ...current.filter((food) => food.foodId !== foodId),
+        { foodId, foodName: displayName },
+      ]);
+      router.refresh();
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -619,83 +796,119 @@ export function SettingsView({
             </form>
           </section>
 
-          <section className="card settings-section" id="preferences">
+          <section
+            aria-labelledby="settings-preferences-heading"
+            className="card settings-section"
+            id="preferences"
+            tabIndex={-1}
+          >
             <div className="card-title">
               <div>
-                <h2>Preferences and safety context</h2>
+                <h2 id="settings-preferences-heading">
+                  Preferences and safety context
+                </h2>
                 <p>Stored account inputs used to filter future suggestions.</p>
               </div>
             </div>
 
-            <div className="message-box" style={{ marginBottom: "1rem" }}>
-              <div>
-                <strong>Stored meal preferences</strong>
-                {initialData.mealPreferences.length ? (
-                  <ul style={{ margin: ".45rem 0 0", paddingLeft: "1.1rem" }}>
-                    {(["breakfast", "lunch", "dinner"] as const).map(
-                      (mealType) => (
-                        <li key={mealType}>
-                          {mealLabels[mealType]}:{" "}
-                          {initialData.mealPreferences
-                            .filter(
-                              (preference) =>
-                                preference.mealType === mealType,
-                            )
-                            .map((preference) => preference.foodName)
-                            .join(", ") || "None selected"}
-                        </li>
-                      ),
-                    )}
-                  </ul>
-                ) : (
-                  <p style={{ margin: ".35rem 0 0" }}>
-                    No meal preferences are stored.
-                  </p>
-                )}
-                <p style={{ margin: ".45rem 0 0" }}>
-                  Meal-selection editing is not available in Settings yet; this is
-                  a read-only view of the saved choices.
-                </p>
-              </div>
-            </div>
+            <MealPreferenceEditor
+              catalogAdditions={labelCatalogAdditions}
+              disabled={savingBlocked}
+              initialPreferences={initialData.mealPreferences}
+            />
 
             <form onSubmit={savePreferences}>
               <div className="field-grid">
-                <label className="field">
-                  <span>Allergies</span>
+                <div className="field preference-field">
+                  <label className="field-label" htmlFor="settings-allergies">
+                    Allergies
+                  </label>
                   <input
-                    disabled={pending !== null}
+                    id="settings-allergies"
+                    disabled={pending !== null || noAllergies}
                     maxLength={1000}
-                    onChange={(event) => setAllergies(event.target.value)}
+                    onChange={(event) => {
+                      setNoAllergies(false);
+                      setAllergies(event.target.value);
+                    }}
                     placeholder="Peanuts, milk"
                     value={allergies}
                   />
+                  <label className="checkbox-row preference-none-option">
+                    <input
+                      checked={noAllergies}
+                      disabled={pending !== null}
+                      onChange={(event) => {
+                        setNoAllergies(event.target.checked);
+                        if (event.target.checked) setAllergies("");
+                      }}
+                      type="checkbox"
+                    />
+                    No known allergies
+                  </label>
                   <small className="field-help">
                     Comma-separated and used as hard exclusions for future plans.
                   </small>
-                </label>
-                <label className="field">
-                  <span>Dietary restrictions</span>
+                </div>
+                <div className="field preference-field">
+                  <label
+                    className="field-label"
+                    htmlFor="settings-dietary-restrictions"
+                  >
+                    Dietary restrictions
+                  </label>
                   <input
-                    disabled={pending !== null}
+                    id="settings-dietary-restrictions"
+                    disabled={pending !== null || noDietaryRestrictions}
                     maxLength={1000}
-                    onChange={(event) =>
-                      setDietaryRestrictions(event.target.value)
-                    }
+                    onChange={(event) => {
+                      setNoDietaryRestrictions(false);
+                      setDietaryRestrictions(event.target.value);
+                    }}
                     placeholder="Vegetarian, gluten-free"
                     value={dietaryRestrictions}
                   />
-                </label>
-                <label className="field">
-                  <span>Foods you dislike</span>
+                  <label className="checkbox-row preference-none-option">
+                    <input
+                      checked={noDietaryRestrictions}
+                      disabled={pending !== null}
+                      onChange={(event) => {
+                        setNoDietaryRestrictions(event.target.checked);
+                        if (event.target.checked) setDietaryRestrictions("");
+                      }}
+                      type="checkbox"
+                    />
+                    No dietary restrictions
+                  </label>
+                </div>
+                <div className="field preference-field">
+                  <label className="field-label" htmlFor="settings-disliked-foods">
+                    Foods you dislike
+                  </label>
                   <input
-                    disabled={pending !== null}
+                    id="settings-disliked-foods"
+                    disabled={pending !== null || noDislikedFoods}
                     maxLength={2000}
-                    onChange={(event) => setDislikedFoods(event.target.value)}
+                    onChange={(event) => {
+                      setNoDislikedFoods(false);
+                      setDislikedFoods(event.target.value);
+                    }}
                     placeholder="Mushrooms, olives"
                     value={dislikedFoods}
                   />
-                </label>
+                  <label className="checkbox-row preference-none-option">
+                    <input
+                      checked={noDislikedFoods}
+                      disabled={pending !== null}
+                      onChange={(event) => {
+                        setNoDislikedFoods(event.target.checked);
+                        if (event.target.checked) setDislikedFoods("");
+                      }}
+                      type="checkbox"
+                    />
+                    No disliked foods
+                  </label>
+                </div>
                 <label className="field">
                   <span>Strength training</span>
                   <select
@@ -724,20 +937,38 @@ export function SettingsView({
                   </select>
                 </label>
               </div>
-              <label className="field" style={{ marginTop: "1rem" }}>
-                <span>Optional safety context</span>
+              <div className="field preference-field" style={{ marginTop: "1rem" }}>
+                <label className="field-label" htmlFor="settings-safety-context">
+                  Optional safety context
+                </label>
                 <textarea
-                  disabled={pending !== null}
+                  id="settings-safety-context"
+                  disabled={pending !== null || noSafetyContext}
                   maxLength={4000}
-                  onChange={(event) => setSafetyContext(event.target.value)}
+                  onChange={(event) => {
+                    setNoSafetyContext(false);
+                    setSafetyContext(event.target.value);
+                  }}
                   placeholder="Share only what is useful for safer, non-restrictive guidance."
                   value={safetyContext}
                 />
+                <label className="checkbox-row preference-none-option">
+                  <input
+                    checked={noSafetyContext}
+                    disabled={pending !== null}
+                    onChange={(event) => {
+                      setNoSafetyContext(event.target.checked);
+                      if (event.target.checked) setSafetyContext("");
+                    }}
+                    type="checkbox"
+                  />
+                  No additional safety context
+                </label>
                 <small className="field-help">
                   Optional context is stored with your profile and used to avoid
                   unsuitable restrictive guidance.
                 </small>
-              </label>
+              </div>
               <div className="section-actions">
                 <button
                   className="button button-dark"
@@ -757,13 +988,109 @@ export function SettingsView({
               <div>
                 <h2>Private label foods</h2>
                 <p>
-                  Photograph and transcribe the exact branded product instead of
-                  guessing. Your confirmed private copy can be used in your plan.
-                  If you explicitly share normalized facts, that separate copy
-                  stays pending until catalog review.
+                  Photograph the exact package label so this device can read the
+                  nutrition facts for you. Compare and correct every value before
+                  saving; your confirmed private copy can then be used in your
+                  plan. If you explicitly share normalized facts, that separate
+                  copy stays pending until catalog review.
                 </p>
               </div>
             </div>
+
+            {activeLabelDrafts.length ? (
+              <div className="label-draft-panel">
+                <div>
+                  <strong>Unfinished private label drafts</strong>
+                  <p>
+                    These drafts count toward your upload allowance. Discard only
+                    a draft you no longer need; its private photos are removed by
+                    the trusted cleanup service.
+                  </p>
+                </div>
+                <ul className="label-draft-list">
+                  {activeLabelDrafts.map((draft) => {
+                    const draftName = [
+                      draft.brandName,
+                      draft.productName,
+                      draft.variantName,
+                    ]
+                      .filter(Boolean)
+                      .join(" — ");
+                    const confirming = confirmDiscardId === draft.id;
+                    return (
+                      <li className="label-draft-item" key={draft.id}>
+                        <div>
+                          <strong>{draftName}</strong>
+                          <span>
+                            {draft.status === "needs_changes"
+                              ? "Needs changes"
+                              : "Draft"}
+                            {" · Created "}
+                            {formatLabelDraftDate(draft.createdAt)}
+                          </span>
+                        </div>
+                        {confirming ? (
+                          <div
+                            aria-label={`Confirm discarding ${draftName}`}
+                            className="label-draft-confirmation"
+                            role="group"
+                          >
+                            <span>This cannot be undone.</span>
+                            <button
+                              className="button button-quiet button-small"
+                              disabled={pending !== null}
+                              onClick={() => setConfirmDiscardId(null)}
+                              type="button"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              className="button button-danger button-small"
+                              disabled={pending !== null}
+                              onClick={() => void discardLabelDraft(draft.id)}
+                              type="button"
+                            >
+                              {pending === "label-draft"
+                                ? "Discarding…"
+                                : "Discard draft permanently"}
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            className="button button-danger button-small"
+                            disabled={pending !== null}
+                            onClick={() => {
+                              setDiscardError(null);
+                              setConfirmDiscardId(draft.id);
+                            }}
+                            type="button"
+                          >
+                            <Trash2 aria-hidden="true" size={17} />
+                            Discard draft
+                          </button>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+                {discardError ? (
+                  <ApiErrorNotice
+                    actionDisabled={pending !== null}
+                    error={discardError}
+                    heading="The draft is still listed."
+                    onAction={
+                      confirmDiscardId
+                        ? () => void discardLabelDraft(confirmDiscardId)
+                        : undefined
+                    }
+                  />
+                ) : null}
+              </div>
+            ) : (
+              <div className="message-box" style={{ marginBottom: "1rem" }}>
+                No unfinished label drafts are using your upload allowance.
+              </div>
+            )}
 
             {privateLabelFoods.length ? (
               <div className="message-box" style={{ marginBottom: "1rem" }}>
@@ -790,7 +1117,7 @@ export function SettingsView({
               </div>
             )}
 
-            <FoodLabelUpload onCreated={() => router.refresh()} />
+            <FoodLabelUpload onCreated={refreshPrivateLabelState} />
           </section>
 
           <section className="card settings-section" id="ai">

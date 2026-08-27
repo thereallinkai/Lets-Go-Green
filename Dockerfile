@@ -6,6 +6,9 @@ FROM node:${NODE_VERSION}-bookworm-slim AS dependencies
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY package.json package-lock.json ./
+COPY scripts/prepare-ocr-assets.mjs ./scripts/prepare-ocr-assets.mjs
+COPY THIRD_PARTY_NOTICES.md ./THIRD_PARTY_NOTICES.md
+COPY licenses ./licenses
 RUN --mount=type=cache,target=/root/.npm npm ci
 
 FROM node:${NODE_VERSION}-bookworm-slim AS builder
@@ -13,6 +16,7 @@ WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
+COPY --from=dependencies /app/public/ocr-runtime ./public/ocr-runtime
 RUN npm run build
 
 FROM node:${NODE_VERSION}-bookworm-slim AS runner
@@ -27,6 +31,8 @@ RUN groupadd --system --gid 1001 nodejs \
     && useradd --system --uid 1001 --gid nodejs --home-dir /app nextjs
 
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/THIRD_PARTY_NOTICES.md ./THIRD_PARTY_NOTICES.md
+COPY --from=builder --chown=nextjs:nodejs /app/licenses ./licenses
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 

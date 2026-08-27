@@ -9,8 +9,8 @@ describe("AppReleaseCard", () => {
     expect(
       screen.getByRole("heading", { name: "About Let's Go Green!" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("Beta 5")).toBeInTheDocument();
-    expect(screen.getByText("v1.0.0-beta.5")).toBeInTheDocument();
+    expect(screen.getByText("Beta 6")).toBeInTheDocument();
+    expect(screen.getByText("v1.0.0-beta.6")).toBeInTheDocument();
     expect(screen.getByText(/This is a testing release/)).toBeInTheDocument();
   });
 });

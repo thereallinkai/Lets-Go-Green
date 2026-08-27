@@ -733,6 +733,9 @@ export function OnboardingFlow({
     "forward",
   );
   const [draft, setDraft] = useState<Draft>(initialDraft);
+  const [editingBlankAllergies, setEditingBlankAllergies] = useState(false);
+  const [editingBlankRestrictions, setEditingBlankRestrictions] = useState(false);
+  const [editingBlankSafety, setEditingBlankSafety] = useState(false);
   const [draftHydrated, setDraftHydrated] = useState(false);
   const [accountDraftReadyForAutosave, setAccountDraftReadyForAutosave] =
     useState(false);
@@ -1355,6 +1358,8 @@ export function OnboardingFlow({
       showPageErrors(errors);
       return;
     }
+    if (!draft.allergies.trim()) setEditingBlankAllergies(false);
+    if (!draft.restrictions.trim()) setEditingBlankRestrictions(false);
     goToStep(6);
   }
 
@@ -2047,6 +2052,12 @@ export function OnboardingFlow({
       errorSummaryRef.current?.focus();
       return;
     }
+    if (target.field === "allergies" && !draft.allergies.trim()) {
+      setEditingBlankAllergies(true);
+    }
+    if (target.field === "restrictions" && !draft.restrictions.trim()) {
+      setEditingBlankRestrictions(true);
+    }
     setStepDirection(target.step < step ? "back" : "forward");
     setStep(target.step);
     window.requestAnimationFrame(() => {
@@ -2099,6 +2110,11 @@ export function OnboardingFlow({
   }
 
   const safetyFlag = draft.safety.length > 0;
+  const allergiesNone =
+    !draft.allergies.trim() && !editingBlankAllergies;
+  const restrictionsNone =
+    !draft.restrictions.trim() && !editingBlankRestrictions;
+  const safetyNone = draft.safety.length === 0 && !editingBlankSafety;
   const apiFocusTarget = onboardingErrorFocusTarget();
   const apiActionIsLocal = Boolean(
     apiError?.action &&
@@ -2465,19 +2481,90 @@ export function OnboardingFlow({
                     Detected automatically when possible. You can enter any valid IANA zone.
                   </span>
                 </label>
-                <label className="field"><span>Allergies</span><input id="onboarding-allergies" aria-invalid={hasPageError("allergies") || undefined} value={draft.allergies} onChange={(event) => update("allergies", event.target.value)} placeholder="Hard exclusions" /></label>
-                <label className="field"><span>Dietary restrictions</span><input id="onboarding-restrictions" aria-invalid={hasPageError("restrictions") || undefined} value={draft.restrictions} onChange={(event) => update("restrictions", event.target.value)} /></label>
+                <div className="field preference-field">
+                  <label className="field-label" htmlFor="onboarding-allergies">Allergies</label>
+                  <input
+                    id="onboarding-allergies"
+                    aria-invalid={hasPageError("allergies") || undefined}
+                    disabled={allergiesNone}
+                    value={draft.allergies}
+                    onChange={(event) => {
+                      setEditingBlankAllergies(true);
+                      update("allergies", event.target.value);
+                    }}
+                    onBlur={() => {
+                      if (!draft.allergies.trim()) {
+                        setEditingBlankAllergies(false);
+                      }
+                    }}
+                    placeholder="Hard exclusions"
+                  />
+                  <label className="checkbox-row preference-none-option">
+                    <input
+                      checked={allergiesNone}
+                      onChange={(event) => {
+                        setEditingBlankAllergies(!event.target.checked);
+                        if (event.target.checked) update("allergies", "");
+                      }}
+                      type="checkbox"
+                    />
+                    No known allergies
+                  </label>
+                </div>
+                <div className="field preference-field">
+                  <label className="field-label" htmlFor="onboarding-restrictions">Dietary restrictions</label>
+                  <input
+                    id="onboarding-restrictions"
+                    aria-invalid={hasPageError("restrictions") || undefined}
+                    disabled={restrictionsNone}
+                    value={draft.restrictions}
+                    onChange={(event) => {
+                      setEditingBlankRestrictions(true);
+                      update("restrictions", event.target.value);
+                    }}
+                    onBlur={() => {
+                      if (!draft.restrictions.trim()) {
+                        setEditingBlankRestrictions(false);
+                      }
+                    }}
+                  />
+                  <label className="checkbox-row preference-none-option">
+                    <input
+                      checked={restrictionsNone}
+                      onChange={(event) => {
+                        setEditingBlankRestrictions(!event.target.checked);
+                        if (event.target.checked) update("restrictions", "");
+                      }}
+                      type="checkbox"
+                    />
+                    No dietary restrictions
+                  </label>
+                </div>
               </div>
               <fieldset style={{ border: 0, margin: "1.5rem 0 0", padding: 0 }}>
                 <legend className="field-label">Optional safety context</legend>
                 <p className="field-help">Choose any that apply so we can keep guidance non-restrictive and suggest professional support when appropriate.</p>
                 <div className="option-grid" style={{ marginTop: ".7rem" }}>
+                  <label className="option-card">
+                    <input
+                      type="checkbox"
+                      checked={safetyNone}
+                      onChange={(event) => {
+                        setEditingBlankSafety(!event.target.checked);
+                        if (event.target.checked) update("safety", []);
+                      }}
+                    />
+                    No additional safety context
+                  </label>
                   {["Under 18", "Pregnant or nursing", "Eating-disorder history", "Relevant medical concern", "Dizziness, fainting, palpitations, or severe weakness"].map((label) => (
                     <label className="option-card" key={label}>
                       <input
                         type="checkbox"
                         checked={draft.safety.includes(label)}
-                        onChange={(event) => update("safety", event.target.checked ? [...draft.safety, label] : draft.safety.filter((item) => item !== label))}
+                        onChange={(event) => {
+                          setEditingBlankSafety(false);
+                          update("safety", event.target.checked ? [...draft.safety, label] : draft.safety.filter((item) => item !== label));
+                        }}
                       />
                       {label}
                     </label>

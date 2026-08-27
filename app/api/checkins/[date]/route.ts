@@ -147,6 +147,18 @@ function profileUnavailable() {
   );
 }
 
+function isRecordedFoodsPreventSkipError(error: unknown) {
+  if (!error || typeof error !== "object" || Array.isArray(error)) {
+    return false;
+  }
+  const candidate = error as { code?: unknown; message?: unknown };
+  return (
+    candidate.code === "23514" &&
+    candidate.message ===
+      "A meal slot with recorded food items cannot be skipped."
+  );
+}
+
 function demoCheckin(date: string) {
   return {
     localDate: date,
@@ -341,6 +353,26 @@ export async function PATCH(
         : {}),
     });
     if (error) {
+      if (
+        parsed.data.status === "skipped" &&
+        isRecordedFoodsPreventSkipError(error)
+      ) {
+        return apiError(
+          "RECORDED_FOODS_PREVENT_SKIP",
+          "This meal now has recorded food and cannot be skipped.",
+          409,
+          {
+            details:
+              "Another tab may have added food. Reload Today, review this meal, and remove every recorded food before trying to skip it.",
+            retryable: false,
+            action: {
+              kind: "navigate",
+              label: "Reload Today",
+              href: "/today",
+            },
+          },
+        );
+      }
       return apiError(
         "CHECKIN_SAVE_FAILED",
         "The meal status could not be saved.",

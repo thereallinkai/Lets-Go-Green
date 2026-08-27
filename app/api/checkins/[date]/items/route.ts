@@ -130,7 +130,7 @@ export async function POST(
         500,
       );
     }
-    const { data: food } = await supabase
+    const { data: food, error: foodError } = await supabase
       .from("foods")
       .select("id,english_name,verification_status")
       .eq("id", parsed.data.foodId)
@@ -140,11 +140,9 @@ export async function POST(
         id: data.id,
         localDate: date,
         mealType: parsed.data.mealType,
-        food: food ?? {
-          id: parsed.data.foodId,
-          english_name: "Selected food",
-          verification_status: "unavailable",
-        },
+        foodId: parsed.data.foodId,
+        food: foodError ? null : food,
+        reconciliationRequired: Boolean(foodError || !food),
       },
       201,
     );

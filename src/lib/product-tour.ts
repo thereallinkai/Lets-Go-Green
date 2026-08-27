@@ -36,15 +36,15 @@ export const PRODUCT_TOUR_STEPS: readonly ProductTourStep[] = [
     description:
       "Search once by food, brand, product, or flavor. Saved catalog, USDA, and Open Food Facts matches appear together; use a private package-label photo when no source match is available.",
     detail:
-      "Online search runs only when you press its button. Choose the intended meal, review source and nutrition, and remember that an imported source record stays pending until reviewed. If a product is missing, photograph its label and enter exactly what it says.",
+      "Online search runs only when you press its button. Choose the intended meal, review source and nutrition, and remember that an imported source record stays pending until reviewed. For a missing product, the on-device label reader suggests clear printed facts; compare, correct, and confirm every value yourself.",
   },
   {
     eyebrow: "Today",
     title: "Record all six eating windows",
     description:
-      "Today separates breakfast, morning snack, lunch, afternoon snack, dinner, and evening snack so extra foods have a clear place.",
+      "Today separates breakfast, morning snack, lunch, afternoon snack, dinner, and evening snack so every recorded food has a clear place.",
     detail:
-      "You can add or remove foods, mark a main meal eaten, or skip it. A skip reason is optional, and snack windows never force you to record anything.",
+      "You can record or remove food in every space, change its completion status, or skip it. Accepted-plan detail stays separate from what you record today, and a skip reason is optional.",
   },
   {
     eyebrow: "My Plan",
@@ -68,6 +68,6 @@ export const PRODUCT_TOUR_STEPS: readonly ProductTourStep[] = [
     description:
       "Open your avatar for profile details, device-time-zone controls, tutorial replay, settings, and shopping shortcuts.",
     detail:
-      "Nearby-shopping buttons open clearly labeled external map searches. They do not claim that a product is in stock. Settings also lets you replay this tutorial and choose System, Light, or Dark appearance.",
+      "Settings lets you edit Breakfast, Lunch, and Dinner preferences, choose explicit None states for optional context, replay this tutorial, and control appearance. Nearby-shopping links never claim that a product is in stock.",
   },
 ] as const;

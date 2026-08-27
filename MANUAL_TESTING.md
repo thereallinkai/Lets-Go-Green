@@ -2,11 +2,36 @@
 
 This guide covers every implemented user-facing area, the main error paths,
 privacy boundaries, the automated quality gates, and the features that are
-intentionally unavailable. Run the full authenticated checklist in a disposable
-GitHub Codespace or VS Code Dev Container. The local Supabase stack and captured
-email service are development tools, not production services.
+intentionally unavailable. A normal macOS or Linux checkout can run the
+credential-free application directly with Node.js; no Python virtual
+environment, container, or Docker daemon is required. Run the full authenticated
+database/RLS checklist against either the optional local Supabase stack in a
+Codespace/Dev Container or a separate hosted Supabase development project. None
+of those development services are production services.
 
-## 1. Prepare a reproducible test environment
+## 1. Prepare a test environment
+
+### Native macOS or Linux — no virtual environment or Docker
+
+From the cloned repository:
+
+```bash
+nvm install
+nvm use
+npm install --global npm@10.9.8
+npm ci
+npm run dev:native
+```
+
+Open `http://127.0.0.1:3000`. In a second terminal run
+`npm run doctor:native`. This lane covers the public/demo UI, local nutrition-
+label recognition, mock-backed behavior, unit/component tests, the production
+build, and application-only browser tests. It deliberately has no account,
+email, upload, or database persistence. Use `npm run verify:app` for its
+automated gate. For persistent accounts without Docker, follow **Native host +
+hosted Supabase** in `README.md` and use an isolated development project.
+
+### Optional complete local stack in Codespaces or a Dev Container
 
 GitHub Codespaces is the recommended path because it does not install project
 software directly on your computer.
@@ -68,7 +93,7 @@ software directly on your computer.
 
     ```dotenv
     USDA_FDC_API_KEY=
-    FOOD_LOOKUP_USER_AGENT=LetsGoGreen/1.0.0-beta.5 (https://github.com/thereallinkai/Lets-Go-Green)
+    FOOD_LOOKUP_USER_AGENT=LetsGoGreen/1.0.0-beta.6 (https://github.com/thereallinkai/Lets-Go-Green)
     ```
 
     Restart `npm run dev:all` after changing environment values. Open Food Facts
@@ -374,6 +399,10 @@ Use a future target date for the main path.
 - [ ] The selected height appears on Step 6 and is included in the deterministic
   energy estimate and plan-provider context. Allergies, dietary restrictions,
   safety context, and notes remain clearly optional.
+- [ ] **No known allergies**, **No dietary restrictions**, and **No additional
+  safety context** are explicit choices. Selecting one clears the corresponding
+  values; selecting a real value clears the visible None state. The API payload
+  contains an empty value and never the literal string `None`.
 - [ ] Selecting **Under 18**, pregnancy/nursing, eating-disorder history,
   relevant medical concern, or concerning symptoms displays non-restrictive
   safety guidance.
@@ -515,11 +544,12 @@ unique brand, product, flavor, package description, and nutrition panel; record
 the exact values you print and delete/reset the disposable local environment
 afterward.
 
-1. In **Settings → Private label foods**, enter brand, product, flavor/variant,
-   package and serving details, calories, protein, carbohydrate, fat,
-   several optional nutrients, ingredients, and an allergen statement.
-2. Choose a clear JPEG or PNG nutrition-label image. On a supported phone or
-   tablet, also confirm the file control can offer the rear camera.
+1. In **Settings → Private label foods**, choose a clear JPEG or PNG
+   nutrition-label image. On a supported phone or tablet, also confirm the file
+   control can offer the rear camera.
+2. Let the automatic on-device reader finish. Compare every suggested brand,
+   product, serving, nutrition, ingredient, and allergen value with the
+   physical package. Correct mistakes and manually enter anything left blank.
 3. Select the explicit package-allergen review, dietary-restriction review, and
    exact-transcription confirmation. First leave normalized sharing unselected;
    then repeat with the separate sharing option selected.
@@ -528,6 +558,25 @@ afterward.
 
 - [ ] Submission is blocked without a nutrition image, confirmation, required
   identity fields, four core nutrition values, ingredients, or allergen text.
+- [ ] Before reading starts, the UI states that recognition occurs on this
+  device using same-origin application files and does not send the photo to an
+  OCR, AI, analytics, or food-data provider. DevTools Network shows no
+  cross-origin photo request.
+- [ ] A clear synthetic label prefills only text and numbers that are explicitly
+  labeled in the image. Units are normalized correctly; ambiguous columns,
+  inequalities such as `<1 g`, low-confidence values, and inferred allergens
+  remain blank or are identified for review rather than guessed.
+- [ ] OCR suggestions never select the package-review, dietary-review,
+  exact-transcription, or normalized-sharing confirmations. Editing an applied
+  suggestion clears exact-transcription confirmation, and every save still
+  requires comparison with the package.
+- [ ] Re-reading the same or a replacement photo first clears unchanged old OCR
+  suggestions while preserving fields the user subsequently edited. An empty
+  recognition result is a non-blocking local-reader notice and does not erase
+  manual input or steal focus from the form.
+- [ ] Canceling recognition, replacing the photo, navigating away, or reaching
+  the bounded reader timeout terminates the active worker. Retry starts one new
+  worker and cannot apply a late result from the canceled photo.
 - [ ] While draft creation, photo upload, or final confirmation is held pending,
   every editable label-form control is disabled, the form remains marked busy,
   and a second submission cannot start. Controls recover after a retryable
@@ -538,7 +587,12 @@ afterward.
 - [ ] A PDF, corrupt image, mismatched declared type, file over 8 MB, image
   smaller than 480 by 480 pixels, image over 20 megapixels, or a nearly blank /
   very low-contrast image is rejected with a concrete reason and without
-  confirming a product.
+  confirming a product. A rejected replacement leaves the preceding valid
+  photo and facts intact.
+- [ ] A valid photo above the local working-pixel bound is downscaled in memory
+  before recognition without changing the selected original evidence file.
+  Failure to decode or downscale gives a concrete local-reader error and does
+  not start the private server save.
 - [ ] The server rotates/re-encodes the accepted JPEG/PNG, strips embedded
   metadata, and records dimensions and a digest rather than trusting the
   browser-provided filename.
@@ -632,8 +686,10 @@ Tutorial case:
 3. Finish it, sign out/in, and confirm the completed version does not
    automatically reopen.
 
-- [ ] The tutorial covers Today, plan review, Calendar/Progress, Profile,
-  privacy, and shopping boundaries.
+- [ ] The tutorial covers all-slot Today recording, plan review,
+  Calendar/Progress, editable Settings meal preferences and None states,
+  on-device label suggestions with mandatory review, Profile, privacy, and
+  shopping boundaries.
 - [ ] Close/skip never traps the user or blocks use of the app.
 - [ ] Focus stays inside the open dialog and returns to the opener.
 - [ ] **Replay tutorial** works after a session skip.
@@ -726,12 +782,22 @@ failure while preserving the accepted plan. Return to **Online** afterward.
 - [ ] Every slot exposes explicit `not marked`, `completed`, and `skipped`
   behavior. Breakfast/lunch/dinner remain the three planned-meal summary; empty
   optional snacks do not count as failures.
+- [ ] Every primary meal and snack exposes **Record food** when empty and
+  **Manage recorded foods** when populated. The picker names the destination
+  and says before submission that recording a food marks that slot done.
+- [ ] Accepted-plan content is labeled separately from **Recorded today**;
+  recording or removing a food never claims to edit the accepted plan or the
+  Settings preference list.
 - [ ] Choose **Skip** for one meal, save with a reason, and another with the
   optional reason blank. Both persist with neutral wording.
 - [ ] **Return to not marked** clears the skipped state and its old reason.
-- [ ] Add a catalog food to each snack space. Adding a food marks that slot
-  completed, does not invent a portion, and does not duplicate the same food.
-- [ ] Remove one recorded food; only that presence record is removed.
+- [ ] Add a catalog food to breakfast, lunch, dinner, and each snack space.
+  Adding a food marks that slot completed, does not invent a portion, and does
+  not duplicate the same food.
+- [ ] Remove one recorded food; only that presence record is removed. Removing
+  the final item preserves the persisted status for Breakfast, Lunch, and
+  Dinner. An empty optional snack returns to `not marked`. A reload matches the
+  immediate UI in both cases.
 - [ ] Search by the exact brand/product/variant of an opted-in reusable label
   record and add the pending shared product to a snack. Its source/review
   wording remains honest.
@@ -746,10 +812,14 @@ failure while preserving the accepted plan. Return to **Online** afterward.
   state.
 
 Failure paths: load Today, go offline in DevTools, then separately toggle a
-status, save a skip reason, add a food, and remove a food. Each failed action
-must restore or retain the preceding state and announce that nothing was saved.
-Go online and confirm subsequent actions persist. Attempts to write a future
-local date or another user's item must fail closed.
+status, save a skip reason, add a food, and remove a food. The UI must never
+claim an interrupted request was not saved: it refreshes the authoritative day
+when possible, otherwise shows the prior screen state with explicit refresh
+guidance. Go online, refresh, and confirm the UI converges without a duplicate
+write. In a second tab, add food while the first tab's Skip editor is open; the
+skip conflict must refresh the recorded food and explain that it must be removed
+before skipping. Attempts to write a future local date or another user's item
+must fail closed.
 
 In controlled API cases, an unavailable Auth service reports
 `CHECKIN_AUTH_UNAVAILABLE`, a failed time-zone profile lookup reports
@@ -866,9 +936,22 @@ the previous history is restored. Return online afterward.
 
 - [ ] Allergies, dietary restrictions, and disliked foods accept comma-separated
   values, trim whitespace, and remove case-insensitive duplicates.
+- [ ] **No known allergies**, **No dietary restrictions**, **No disliked
+  foods**, and **No additional safety context** have distinct accessible names,
+  clear their corresponding values, persist as empty values, and never store a
+  literal `None` item. Saving a blank field leaves its None state selected.
 - [ ] Training days accepts only 0 through 7.
 - [ ] Safety context saves and persists.
-- [ ] Saved onboarding meal choices are displayed read-only.
+- [ ] Breakfast, Lunch, and Dinner each show their saved onboarding choices and
+  an explicit **None selected** empty state. The rich picker can add an eligible
+  saved food, and each existing choice can be removed individually.
+- [ ] Duplicate, newly ineligible, 50-choice limit, session expiry, Auth outage,
+  database outage, and lost-response cases show distinct safe errors. Retrying
+  cannot duplicate a choice; one account cannot add another account's private
+  food or mutate another account's preferences.
+- [ ] Emptying a meal warns that future plan generation may need more eligible
+  choices. Preference changes do not alter Today records and affect only future
+  drafts; an accepted plan remains immutable.
 - [ ] Saving preferences does not silently replace an accepted plan.
 
 ### Private label foods
@@ -1152,6 +1235,12 @@ docker run --rm --entrypoint id lets-go-green:local
 
 Expected: the image builds, its configured/runtime user is non-root, UID/GID
 1001 is used, and the health check targets `/api/health`.
+
+Before the container build, `npm run ocr:assets:check` must pass. After build,
+confirm `/ocr-runtime/manifest.json`, the worker, WebAssembly core, and English
+trained data return from the application origin. A missing, altered, or
+version-mismatched asset must fail the build or produce the concrete local
+reader-unavailable UI; it must never fall back to a CDN.
 
 To confirm production fails closed without hosted runtime configuration:
 

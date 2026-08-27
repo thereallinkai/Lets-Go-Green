@@ -91,6 +91,28 @@ jobs:
       - name: Build the production application
         run: npm run build
 
+      - name: Build and inspect the production container
+        shell: bash
+        run: |
+          set -o pipefail
+          docker build --tag lets-go-green:ci .
+          docker run --rm --entrypoint sh lets-go-green:ci -ceu '
+            test "$(id -u)" = "1001"
+            test -f server.js
+            test -f public/ocr-runtime/manifest.json
+            test -f public/ocr-runtime/worker.min.js
+            test -f public/ocr-runtime/core/tesseract-core-lstm.wasm.js
+            test -f public/ocr-runtime/core/tesseract-core-simd-lstm.wasm.js
+            test -f public/ocr-runtime/core/tesseract-core-relaxedsimd-lstm.wasm.js
+            test -f public/ocr-runtime/lang/eng.traineddata.gz
+            test -f public/ocr-runtime/THIRD_PARTY_NOTICES.md
+            test -f public/ocr-runtime/licenses/APACHE-2.0.txt
+            test -f public/ocr-runtime/licenses/MIT.txt
+            test -f public/ocr-runtime/licenses/BSD-3-Clause.txt
+            test -f public/ocr-runtime/worker.min.js.LICENSE.txt
+            test -f THIRD_PARTY_NOTICES.md
+          '
+
       - name: Run Playwright end-to-end and accessibility tests
         run: npm run test:e2e
 

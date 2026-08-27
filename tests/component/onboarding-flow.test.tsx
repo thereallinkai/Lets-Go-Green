@@ -780,6 +780,106 @@ describe("OnboardingFlow navigation and restoration", () => {
   });
 });
 
+describe("OnboardingFlow preference and safety None choices", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    router.push.mockReset();
+    router.replace.mockReset();
+    router.refresh.mockReset();
+  });
+
+  it("keeps every empty lifestyle value visibly represented by a distinct None choice", async () => {
+    window.localStorage.setItem(
+      ONBOARDING_DRAFT_KEY,
+      storedDraft(completionDraft(), Date.now(), 5),
+    );
+    mockCompletionRequests();
+    const user = userEvent.setup();
+    render(<OnboardingFlow initialStep={5} />);
+
+    await screen.findByRole("heading", {
+      name: "Add the context your plan needs.",
+    });
+    const noAllergies = screen.getByRole("checkbox", {
+      name: "No known allergies",
+    });
+    const noRestrictions = screen.getByRole("checkbox", {
+      name: "No dietary restrictions",
+    });
+    const noSafety = screen.getByRole("checkbox", {
+      name: "No additional safety context",
+    });
+    expect(noAllergies).toBeChecked();
+    expect(noRestrictions).toBeChecked();
+    expect(noSafety).toBeChecked();
+    expect(screen.getByRole("textbox", { name: "Allergies" })).toBeDisabled();
+
+    await user.click(noAllergies);
+    const allergies = screen.getByRole("textbox", { name: "Allergies" });
+    expect(allergies).toBeEnabled();
+    await user.type(allergies, "Peanuts");
+    await user.clear(allergies);
+    await user.tab();
+    expect(noAllergies).toBeChecked();
+    expect(allergies).toBeDisabled();
+
+    const medicalConcern = screen.getByRole("checkbox", {
+      name: "Relevant medical concern",
+    });
+    await user.click(medicalConcern);
+    expect(noSafety).not.toBeChecked();
+    await user.click(medicalConcern);
+    expect(noSafety).toBeChecked();
+
+    await user.click(noSafety);
+    expect(noSafety).not.toBeChecked();
+    expect(
+      screen.getAllByRole("checkbox", {
+        name: "No additional safety context",
+      }),
+    ).toHaveLength(1);
+  });
+
+  it("submits empty values instead of a literal None sentinel", async () => {
+    window.localStorage.setItem(
+      ONBOARDING_DRAFT_KEY,
+      storedDraft(completionDraft(), Date.now(), 6),
+    );
+    const fetchMock = mockCompletionRequests();
+    const user = userEvent.setup();
+    render(<OnboardingFlow initialStep={6} />);
+
+    await screen.findByText("fat loss · 210 lb → 200 lb · 2026-08-31");
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "I have reviewed this information and want to complete onboarding.",
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Go to Today" }));
+
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([input, init]) =>
+            String(input).endsWith("/api/onboarding") && init?.method === "PUT",
+        ),
+      ).toBe(true),
+    );
+    const completionRequest = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        String(input).endsWith("/api/onboarding") && init?.method === "PUT",
+    );
+    const body = JSON.parse(String(completionRequest?.[1]?.body));
+    expect(body).toMatchObject({
+      allergies: "",
+      restrictions: "",
+      safety: [],
+      completed: true,
+    });
+    expect(JSON.stringify(body)).not.toMatch(/"None"/i);
+  });
+});
+
 describe("OnboardingFlow food preferences", () => {
   beforeEach(() => {
     window.localStorage.clear();

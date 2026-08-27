@@ -4,7 +4,14 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+NEEDS_BOOTSTRAP=false
 if [[ ! -x node_modules/.bin/next || ! -f .env.local ]]; then
+  NEEDS_BOOTSTRAP=true
+elif ! node scripts/prepare-ocr-assets.mjs --check >/dev/null 2>&1; then
+  NEEDS_BOOTSTRAP=true
+fi
+
+if [[ "$NEEDS_BOOTSTRAP" == true ]]; then
   printf 'The local environment is incomplete; running the idempotent bootstrap first.\n'
   ./scripts/bootstrap
 fi

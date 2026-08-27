@@ -343,21 +343,21 @@ export function ProfileView({ data }: { data: ProfileViewData }) {
               <h3>Allergies</h3>
               <ListValue
                 items={profile.allergies}
-                empty="None provided"
+                empty="No known allergies"
               />
             </div>
             <div>
               <h3>Dietary restrictions</h3>
               <ListValue
                 items={profile.dietaryRestrictions}
-                empty="None provided"
+                empty="No dietary restrictions"
               />
             </div>
             <div>
               <h3>Disliked foods</h3>
               <ListValue
                 items={profile.dislikedFoods}
-                empty="None provided"
+                empty="No disliked foods"
               />
             </div>
           </div>
@@ -370,6 +370,11 @@ export function ProfileView({ data }: { data: ProfileViewData }) {
               </span>
             </div>
           ) : null}
+          <div className="section-actions">
+            <Link className="button button-quiet" href="/settings#preferences">
+              <Settings size={16} aria-hidden="true" /> Edit meal preferences
+            </Link>
+          </div>
         </section>
 
         <section className="card profile-card" aria-labelledby="tutorial-heading">

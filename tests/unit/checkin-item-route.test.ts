@@ -94,6 +94,48 @@ describe("DELETE check-in item route", () => {
     expect(routeState.rpc).not.toHaveBeenCalled();
   });
 
+  it("treats a replay after a committed delete as idempotent success", async () => {
+    routeState.itemResult.data = null;
+
+    const response = await DELETE(new Request("http://localhost"), {
+      params: Promise.resolve({
+        date: "2026-07-29",
+        id: "11111111-1111-4111-8111-111111111111",
+      }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.data).toEqual({
+      id: "11111111-1111-4111-8111-111111111111",
+      localDate: "2026-07-29",
+      alreadyAbsent: true,
+    });
+    expect(routeState.rpc).not.toHaveBeenCalled();
+  });
+
+  it("treats a concurrent delete between precheck and RPC as idempotent success", async () => {
+    routeState.checkinResult.data = {
+      id: "22222222-2222-4222-8222-222222222222",
+    };
+    routeState.rpc.mockResolvedValue({ data: null, error: null });
+
+    const response = await DELETE(new Request("http://localhost"), {
+      params: Promise.resolve({
+        date: "2026-07-29",
+        id: "11111111-1111-4111-8111-111111111111",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).data).toMatchObject({
+      alreadyAbsent: true,
+    });
+    expect(routeState.rpc).toHaveBeenCalledWith("delete_daily_meal_item", {
+      target_item_id: "11111111-1111-4111-8111-111111111111",
+    });
+  });
+
   it("distinguishes an auth outage from a missing session", async () => {
     routeState.authResult.data.user = null;
     routeState.authResult.error = {

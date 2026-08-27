@@ -1298,6 +1298,18 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      append_meal_preference: {
+        Args: {
+          selected_food_id: string
+          selected_meal_type: Database["public"]["Enums"]["meal_type"]
+        }
+        Returns: {
+          food_id: string
+          id: string
+          meal_type: Database["public"]["Enums"]["meal_type"]
+          sort_order: number
+        }[]
+      }
       application_health: {
         Args: { expected_migration: string }
         Returns: Json
@@ -1385,6 +1397,14 @@ export type Database = {
         Args: { label_data: Json; label_submission_id?: string }
         Returns: string
       }
+      create_food_label_draft: {
+        Args: { target_draft_id: string; target_label_data: Json }
+        Returns: {
+          id: string
+          replayed: boolean
+          status: Database["public"]["Enums"]["food_label_submission_status"]
+        }[]
+      }
       delete_daily_meal_item: {
         Args: { target_item_id: string }
         Returns: string
@@ -1392,6 +1412,14 @@ export type Database = {
       delete_weight_entry: {
         Args: { target_entry_id: string }
         Returns: string
+      }
+      discard_food_label_draft: {
+        Args: { target_submission_id: string; target_user_id: string }
+        Returns: {
+          already_absent: boolean
+          cleanup_queued: number
+          discarded: boolean
+        }[]
       }
       finalize_food_label_upload: {
         Args: {
@@ -1449,6 +1477,16 @@ export type Database = {
           target_user_id: string
         }
         Returns: Json
+      }
+      remove_meal_preference: {
+        Args: {
+          selected_food_id: string
+          selected_meal_type: Database["public"]["Enums"]["meal_type"]
+        }
+        Returns: {
+          already_absent: boolean
+          removed: boolean
+        }[]
       }
       repair_verified_profile: { Args: never; Returns: Json }
       reserve_plan_generation: {

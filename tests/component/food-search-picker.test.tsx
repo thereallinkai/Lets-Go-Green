@@ -101,6 +101,23 @@ afterEach(() => {
 });
 
 describe("FoodSearchPicker smart discovery", () => {
+  it("can hide the duplicate private-label workflow with truthful Settings guidance", () => {
+    render(
+      <FoodSearchPicker
+        foods={[]}
+        search="missing product"
+        onSearchChange={vi.fn()}
+        onAdd={vi.fn()}
+        onCatalogChanged={vi.fn(async () => true)}
+        showLabelUploadFallback={false}
+      />,
+    );
+
+    expect(screen.queryByText(/Product not found\?/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/add a private label food from Settings/i)).toBeInTheDocument();
+    expect(screen.queryByText(/package label below/i)).not.toBeInTheDocument();
+  });
+
   it("reports a resolved false from the initial saved-food refresh", async () => {
     vi.useFakeTimers();
     const onCatalogChanged = vi.fn(async () => false);
