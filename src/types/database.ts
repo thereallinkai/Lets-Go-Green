@@ -1398,10 +1398,7 @@ export type Database = {
         Returns: string
       }
       create_food_label_draft: {
-        Args: {
-          target_draft_id: string
-          target_label_data: Json
-        }
+        Args: { target_draft_id: string; target_label_data: Json }
         Returns: {
           id: string
           replayed: boolean
@@ -1481,7 +1478,6 @@ export type Database = {
         }
         Returns: Json
       }
-      repair_verified_profile: { Args: never; Returns: Json }
       remove_meal_preference: {
         Args: {
           selected_food_id: string
@@ -1492,6 +1488,7 @@ export type Database = {
           removed: boolean
         }[]
       }
+      repair_verified_profile: { Args: never; Returns: Json }
       reserve_plan_generation: {
         Args: {
           request_idempotency_key: string
