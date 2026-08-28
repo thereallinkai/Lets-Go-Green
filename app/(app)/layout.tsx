@@ -8,7 +8,7 @@ import { ProductTour } from "@/components/product-tour";
 import { isDevelopmentDemo } from "@/src/lib/env";
 import { CURRENT_PRODUCT_TOUR_VERSION } from "@/src/lib/product-tour";
 import {
-  createSupabaseServerClient,
+  getCurrentProfile,
   getCurrentUser,
 } from "@/src/lib/supabase/server";
 
@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
 type AppShellProfile = {
   full_name: string;
   onboarding_status: "not_started" | "in_progress" | "completed";
-  product_tour_completed_version?: number;
+  product_tour_completed_version: number;
 };
 
 export default async function ProtectedLayout({ children }: { children: React.ReactNode }) {
@@ -27,13 +27,8 @@ export default async function ProtectedLayout({ children }: { children: React.Re
 
   let storedProfile: AppShellProfile | null = null;
   if (user) {
-    const supabase = await createSupabaseServerClient();
-    const { data } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("user_id", user.id)
-      .maybeSingle();
-    storedProfile = data as unknown as AppShellProfile | null;
+    const { data } = await getCurrentProfile(user.id);
+    storedProfile = data;
   }
 
   const name = String(

@@ -20,6 +20,11 @@ import type {
   FoodNutritionFacts,
   FoodSourceSummary,
 } from "@/src/lib/domain/food-catalog";
+import {
+  MEAL_SLOT_LABELS,
+  PRIMARY_MEAL_TYPES,
+  type PrimaryMealType,
+} from "@/src/lib/domain/meal-slots";
 import type {
   ExternalFoodCandidate,
   ExternalFoodProviderStatus,
@@ -38,7 +43,7 @@ export type FoodPickerItem = {
   source?: FoodSourceSummary | null;
 };
 
-type Meal = "breakfast" | "lunch" | "dinner";
+type Meal = PrimaryMealType;
 type SearchPhase = "idle" | "waiting" | "searching" | "success" | "error";
 type Notice = { text: string };
 
@@ -98,12 +103,6 @@ const INITIAL_RESULT_COUNT = 6;
 const COMPLETE_SEARCH_CACHE_TTL_MS = 30 * 60 * 1_000;
 const PARTIAL_SEARCH_CACHE_TTL_MS = 30 * 1_000;
 const DEFAULT_IMPORT_COOLDOWN_SECONDS = 5 * 60;
-const mealLabels: Record<Meal, string> = {
-  breakfast: "Breakfast",
-  lunch: "Lunch",
-  dinner: "Dinner",
-};
-
 function coreNutritionIdentity(candidate: ExternalFoodCandidate) {
   const value = (amount: number | null) =>
     amount === null ? "missing" : String(Math.round(amount * 1_000) / 1_000);
@@ -903,8 +902,8 @@ export function FoodSearchPicker({
             onChange={(event) => setDestinationMeal(event.target.value as Meal | "")}
           >
             <option value="">Choose a meal…</option>
-            {(Object.keys(mealLabels) as Meal[]).map((meal) => (
-              <option value={meal} key={meal}>{mealLabels[meal]}</option>
+            {PRIMARY_MEAL_TYPES.map((meal) => (
+              <option value={meal} key={meal}>{MEAL_SLOT_LABELS[meal]}</option>
             ))}
           </select>
           <small>
@@ -1023,7 +1022,7 @@ export function FoodSearchPicker({
                         : !food.planEligible
                         ? "Needs review"
                         : destinationMeal
-                          ? `Add to ${mealLabels[destinationMeal]}`
+                          ? `Add to ${MEAL_SLOT_LABELS[destinationMeal]}`
                           : "Choose a meal to add"}
                     </button>
                   </div>

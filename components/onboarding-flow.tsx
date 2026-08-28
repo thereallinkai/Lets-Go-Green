@@ -54,12 +54,17 @@ import type {
   FoodSourceSummary,
 } from "@/src/lib/domain/food-catalog";
 import {
+  PRIMARY_MEAL_TYPES,
+  type PrimaryMealType,
+} from "@/src/lib/domain/meal-slots";
+import { convertWeight } from "@/src/lib/domain/units";
+import {
   normalizeRegistrationEmail,
   readRegistrationEmailHandoff,
   REGISTRATION_EMAIL_HANDOFF_KEY,
 } from "@/src/lib/registration-email-handoff";
 
-type Meal = "breakfast" | "lunch" | "dinner";
+type Meal = PrimaryMealType;
 type Unit = "kg" | "lb";
 type AcknowledgedWarning = {
   mealType: Meal;
@@ -98,7 +103,7 @@ const GOAL_TYPES = new Set([
   "recomposition",
 ]);
 const ACTIVITY_LEVELS = new Set(["low", "light", "moderate", "high"]);
-const MEALS = ["breakfast", "lunch", "dinner"] as const;
+const MEALS = PRIMARY_MEAL_TYPES;
 const WARNING_CODES = new Set([
   "missing_carbohydrate",
   "missing_protein",
@@ -589,8 +594,6 @@ const stepLabels = [
   "Lifestyle and safety",
   "Review and complete",
 ];
-
-const LB_PER_KG = 2.2046226218;
 
 function SortableFood({
   food,
@@ -1187,12 +1190,12 @@ export function OnboardingFlow({
   const currentKg = useMemo(() => {
     const value = Number(draft.currentWeight);
     if (!Number.isFinite(value)) return null;
-    return draft.unit === "kg" ? value : value / LB_PER_KG;
+    return convertWeight(value, draft.unit, "kg");
   }, [draft.currentWeight, draft.unit]);
   const targetKg = useMemo(() => {
     const value = Number(draft.targetWeight);
     if (!Number.isFinite(value)) return null;
-    return draft.unit === "kg" ? value : value / LB_PER_KG;
+    return convertWeight(value, draft.unit, "kg");
   }, [draft.targetWeight, draft.unit]);
 
   function showPageErrors(
@@ -1662,7 +1665,7 @@ export function OnboardingFlow({
     const convert = (raw: string) => {
       const value = Number(raw);
       if (!Number.isFinite(value)) return raw;
-      return (next === "lb" ? value * LB_PER_KG : value / LB_PER_KG).toFixed(1);
+      return convertWeight(value, draft.unit, next).toFixed(1);
     };
     setDraft((current) => ({
       ...current,
@@ -2392,7 +2395,7 @@ export function OnboardingFlow({
                   onCatalogChanged={loadCatalogFoods}
                 />
                 <div className="meal-destinations">
-                  {(["breakfast", "lunch", "dinner"] as Meal[]).map((meal) => (
+                  {MEALS.map((meal) => (
                     <MealDestination key={meal} meal={meal} ids={draft.meals[meal]} foods={catalogFoods} missingCategories={missingCategories(meal)} onChange={(ids) => setMeal(meal, ids)} announce={setAnnouncement} />
                   ))}
                 </div>
@@ -2593,7 +2596,7 @@ export function OnboardingFlow({
               <div className="settings-content">
                 <section className="card">
                   <div className="card-title"><div><h2>Meals</h2><p>Provided by you</p></div><button className="text-link" disabled={completionPhase !== null} onClick={() => goToStep(3)} type="button">Edit</button></div>
-                  <p className="field-help">{(["breakfast", "lunch", "dinner"] as Meal[]).map((meal) => `${meal}: ${draft.meals[meal].length} foods`).join(" · ")}</p>
+                  <p className="field-help">{MEALS.map((meal) => `${meal}: ${draft.meals[meal].length} foods`).join(" · ")}</p>
                 </section>
                 <section className="card">
                   <div className="card-title"><div><h2>Goal and timeline</h2><p>Provided by you + calculated by the app</p></div><button className="text-link" disabled={completionPhase !== null} onClick={() => goToStep(4)} type="button">Edit</button></div>

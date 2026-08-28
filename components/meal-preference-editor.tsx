@@ -16,8 +16,13 @@ import type {
   FoodNutritionFacts,
   FoodSourceSummary,
 } from "@/src/lib/domain/food-catalog";
+import {
+  MEAL_SLOT_LABELS,
+  PRIMARY_MEAL_TYPES,
+  type PrimaryMealType,
+} from "@/src/lib/domain/meal-slots";
 
-type Meal = "breakfast" | "lunch" | "dinner";
+type Meal = PrimaryMealType;
 
 export type StoredMealPreference = {
   mealType: Meal;
@@ -42,12 +47,8 @@ type RemovalResponse = {
   persisted: boolean;
 };
 
-const meals = ["breakfast", "lunch", "dinner"] as const;
-const mealLabels: Record<Meal, string> = {
-  breakfast: "Breakfast",
-  lunch: "Lunch",
-  dinner: "Dinner",
-};
+const meals = PRIMARY_MEAL_TYPES;
+const mealLabels = MEAL_SLOT_LABELS;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);

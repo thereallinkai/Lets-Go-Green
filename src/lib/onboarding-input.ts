@@ -1,3 +1,5 @@
+import { poundsToKilograms } from "@/src/lib/domain/units";
+
 const LEGACY_FOOD_SLUGS: Readonly<Record<string, string>> = {
   "vegetable-vitamin-powder": "vegetable-or-vitamin-powder",
 };
@@ -9,8 +11,6 @@ export type ParsedOptionalHeight =
 export type ParsedWeight =
   | { ok: true; weightKg: number }
   | { ok: false; weightKg: null };
-
-const LB_PER_KG = 2.2046226218;
 
 function validHeightCm(heightCm: number) {
   return Number.isFinite(heightCm) && heightCm >= 50 && heightCm <= 300;
@@ -74,7 +74,7 @@ export function parseWeightKg(
   }
   const displayedWeight = Number(input);
   const weightKg =
-    unit === "kg" ? displayedWeight : displayedWeight / LB_PER_KG;
+    unit === "kg" ? displayedWeight : poundsToKilograms(displayedWeight);
   if (!Number.isFinite(weightKg) || weightKg < 20 || weightKg > 500) {
     return { ok: false, weightKg: null };
   }

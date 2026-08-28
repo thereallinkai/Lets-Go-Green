@@ -10,7 +10,11 @@ import {
   type MealSlot,
 } from "@/src/lib/domain";
 import { isDevelopmentDemo } from "@/src/lib/env";
-import { createSupabaseServerClient } from "@/src/lib/supabase/server";
+import {
+  createSupabaseServerClient,
+  getCurrentProfile,
+  getCurrentUser,
+} from "@/src/lib/supabase/server";
 
 export const metadata: Metadata = { title: "Calendar" };
 
@@ -26,14 +30,10 @@ function monthBounds(month: string) {
 export default async function CalendarPage() {
   if (isDevelopmentDemo()) return <CalendarView />;
 
+  const user = await getCurrentUser();
+  if (!user) return <CalendarView initialCheckins={[]} />;
+  const { data: profile } = await getCurrentProfile(user.id);
   const supabase = await createSupabaseServerClient();
-  const { data: auth } = await supabase.auth.getUser();
-  if (!auth.user) return <CalendarView initialCheckins={[]} />;
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("time_zone")
-    .eq("user_id", auth.user.id)
-    .single();
   const timeZone = profile?.time_zone ?? "UTC";
   const today = localDateInTimeZone(new Date(), timeZone);
   const month = today.slice(0, 7);
@@ -42,14 +42,14 @@ export default async function CalendarPage() {
     supabase
       .from("daily_checkins")
       .select("local_date,notes")
-      .eq("user_id", auth.user.id)
+      .eq("user_id", user.id)
       .gte("local_date", bounds.first)
       .lte("local_date", bounds.last)
       .order("local_date"),
     supabase
       .from("daily_meal_checkins")
       .select("local_date,meal_type,status,skip_reason")
-      .eq("user_id", auth.user.id)
+      .eq("user_id", user.id)
       .gte("local_date", bounds.first)
       .lte("local_date", bounds.last)
       .order("local_date"),

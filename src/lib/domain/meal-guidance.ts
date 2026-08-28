@@ -1,5 +1,9 @@
-export const MEAL_TYPES = ["breakfast", "lunch", "dinner"] as const;
-export type MealType = (typeof MEAL_TYPES)[number];
+import {
+  PRIMARY_MEAL_TYPES,
+  type PrimaryMealType,
+} from "./meal-slots";
+
+export type MealType = PrimaryMealType;
 
 export const FOOD_CATEGORIES = [
   "carbohydrate",
@@ -33,7 +37,7 @@ export const REQUIRED_MEAL_CATEGORIES: Readonly<
 export function validateMealCategories(
   meals: Readonly<Record<MealType, readonly CategorizedFood[]>>,
 ): MealCategoryWarning[] {
-  return MEAL_TYPES.flatMap((mealType) => {
+  return PRIMARY_MEAL_TYPES.flatMap((mealType) => {
     const present = new Set(
       meals[mealType].flatMap((food) => [...food.categories]),
     );
@@ -81,7 +85,7 @@ export function formatMealCategoryWarnings(
   }
 
   const clauses = categoryOrder.flatMap((category) => {
-    const meals = MEAL_TYPES.filter((mealType) =>
+    const meals = PRIMARY_MEAL_TYPES.filter((mealType) =>
       unique.has(`${mealType}:${category}`),
     );
     if (meals.length === 0) return [];

@@ -1,7 +1,24 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const protectedPrefixes = ["/today", "/plan", "/calendar", "/progress", "/settings"];
+const PROTECTED_ROUTE_PREFIXES = [
+  "/today",
+  "/plan",
+  "/calendar",
+  "/progress",
+  "/profile",
+  "/settings",
+] as const;
+
+function isPathWithin(pathname: string, prefix: string) {
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
+function isProtectedPath(pathname: string) {
+  return PROTECTED_ROUTE_PREFIXES.some((prefix) =>
+    isPathWithin(pathname, prefix),
+  );
+}
 
 export async function proxy(request: NextRequest) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -11,7 +28,7 @@ export async function proxy(request: NextRequest) {
   if (!url || !key) {
     if (
       process.env.NODE_ENV === "production" &&
-      protectedPrefixes.some((prefix) => request.nextUrl.pathname.startsWith(prefix))
+      isProtectedPath(request.nextUrl.pathname)
     ) {
       return NextResponse.redirect(new URL("/login", request.url));
     }
@@ -32,9 +49,7 @@ export async function proxy(request: NextRequest) {
   });
 
   const { data } = await supabase.auth.getUser();
-  const isProtected = protectedPrefixes.some((prefix) =>
-    request.nextUrl.pathname.startsWith(prefix),
-  );
+  const isProtected = isProtectedPath(request.nextUrl.pathname);
 
   if (isProtected && !data.user) {
     const loginUrl = new URL("/login", request.url);
@@ -51,6 +66,14 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/today/:path*",
+    "/plan/:path*",
+    "/calendar/:path*",
+    "/progress/:path*",
+    "/profile/:path*",
+    "/settings/:path*",
+    "/onboarding/:path*",
+    "/login",
+    "/register",
   ],
 };

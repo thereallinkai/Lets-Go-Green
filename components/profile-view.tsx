@@ -19,6 +19,7 @@ import {
   PRODUCT_TOUR_REPLAY_REQUEST_KEY,
 } from "@/src/lib/product-tour";
 import { parseLocalDate } from "@/src/lib/domain/dates";
+import { convertWeight } from "@/src/lib/domain/units";
 
 type ProfileViewData = {
   mode: "authenticated" | "demo";
@@ -151,7 +152,7 @@ function displayWeight(
   unit: ProfileViewData["profile"]["preferredWeightUnit"],
 ) {
   if (weightKg === null) return "Not available";
-  const value = unit === "lb" ? weightKg * 2.2046226218 : weightKg;
+  const value = convertWeight(weightKg, "kg", unit);
   return `${value.toFixed(1)} ${unit}`;
 }
 

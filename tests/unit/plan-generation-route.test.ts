@@ -6,6 +6,8 @@ const routeState = vi.hoisted(() => ({
     error: null as unknown,
   },
   providerGenerate: vi.fn(),
+  requestEq: vi.fn(),
+  requestIs: vi.fn(),
   requestUpdate: vi.fn(),
   serverError: false,
 }));
@@ -133,13 +135,17 @@ describe("POST plan generation route", () => {
       error: null,
     };
     routeState.providerGenerate.mockReset();
+    routeState.requestEq.mockReset();
+    routeState.requestIs.mockReset();
     routeState.requestUpdate.mockReset();
     routeState.serverError = false;
-    routeState.requestUpdate.mockReturnValue({
-      eq: vi.fn().mockReturnValue({
-        eq: vi.fn().mockResolvedValue({ error: null }),
-      }),
-    });
+    const requestUpdateQuery = {
+      eq: routeState.requestEq,
+      is: routeState.requestIs,
+    };
+    routeState.requestEq.mockReturnValue(requestUpdateQuery);
+    routeState.requestIs.mockResolvedValue({ error: null });
+    routeState.requestUpdate.mockReturnValue(requestUpdateQuery);
   });
 
   it("blocks a legacy completed profile with no height before generation", async () => {
@@ -164,6 +170,8 @@ describe("POST plan generation route", () => {
         sanitized_error_code: "PROFILE_HEIGHT_REQUIRED",
       }),
     );
+    expect(routeState.requestEq).toHaveBeenCalledWith("status", "processing");
+    expect(routeState.requestIs).toHaveBeenCalledWith("plan_id", null);
   });
 
   it("returns a signed-out error for Supabase's missing-session result", async () => {

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Database, Json } from "@/src/types/database";
 import { localDateInTimeZone } from "@/src/lib/domain";
+import { PRIMARY_MEAL_TYPES } from "@/src/lib/domain/meal-slots";
 import { apiError, apiSuccess, publicError } from "@/src/lib/api-response";
 import { isAuthSessionMissing } from "@/src/lib/auth-error-taxonomy";
 import { isDevelopmentDemo } from "@/src/lib/env";
@@ -46,7 +47,7 @@ const draftSchema = z
     acknowledgedWarnings: z
       .array(
         z.object({
-          mealType: z.enum(["breakfast", "lunch", "dinner"]),
+          mealType: z.enum(PRIMARY_MEAL_TYPES),
           warningCode: z.enum([
             "missing_carbohydrate",
             "missing_protein",
@@ -353,7 +354,7 @@ export async function PUT(request: Request) {
       );
     }
 
-    const preferences = (["breakfast", "lunch", "dinner"] as const).flatMap((mealType) =>
+    const preferences = PRIMARY_MEAL_TYPES.flatMap((mealType) =>
       parsed.data.meals[mealType].map((slug, sortOrder) => ({
         mealType,
         foodSlug: slug,

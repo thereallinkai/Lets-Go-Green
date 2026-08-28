@@ -10,7 +10,11 @@ import {
   localDateInTimeZone,
   resolveProfileAge,
 } from "@/src/lib/domain";
-import { createSupabaseServerClient } from "@/src/lib/supabase/server";
+import {
+  createSupabaseServerClient,
+  getCurrentProfile,
+  getCurrentUser,
+} from "@/src/lib/supabase/server";
 
 export const metadata: Metadata = { title: "Profile" };
 
@@ -82,23 +86,17 @@ export default async function ProfilePage() {
     );
   }
 
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
   const supabase = await createSupabaseServerClient();
-  const { data: auth, error: authError } = await supabase.auth.getUser();
-  if (authError || !auth.user) redirect("/login");
 
   const [profileResult, goalResult, latestWeightResult, preferenceCountResult] =
     await Promise.all([
-      supabase
-        .from("profiles")
-        .select(
-          "full_name,age,date_of_birth,gender,height_cm,preferred_weight_unit,time_zone,activity_level,training_days_per_week,allergies,dietary_restrictions,disliked_foods,safety_context,onboarding_completed_at",
-        )
-        .eq("user_id", auth.user.id)
-        .maybeSingle(),
+      getCurrentProfile(user.id),
       supabase
         .from("goals")
         .select("goal_type,target_weight_kg,target_date")
-        .eq("user_id", auth.user.id)
+        .eq("user_id", user.id)
         .eq("status", "active")
         .order("created_at", { ascending: false })
         .limit(1)
@@ -106,7 +104,7 @@ export default async function ProfilePage() {
       supabase
         .from("weight_entries")
         .select("weight_kg")
-        .eq("user_id", auth.user.id)
+        .eq("user_id", user.id)
         .order("local_date", { ascending: false })
         .order("created_at", { ascending: false })
         .limit(1)
@@ -114,7 +112,7 @@ export default async function ProfilePage() {
       supabase
         .from("meal_preferences")
         .select("food:foods(english_name)", { count: "exact" })
-        .eq("user_id", auth.user.id)
+        .eq("user_id", user.id)
         .order("meal_type")
         .order("sort_order")
         .limit(12),
@@ -145,13 +143,13 @@ export default async function ProfilePage() {
   const data: ProfileViewData = {
     mode: "authenticated",
     account: {
-      email: auth.user.email ?? "Email unavailable",
-      createdAt: auth.user.created_at,
+      email: user.email ?? "Email unavailable",
+      createdAt: user.created_at,
     },
     profile: {
       fullName:
         profile?.full_name ??
-        String(auth.user.user_metadata.full_name ?? "Member"),
+        String(user.user_metadata.full_name ?? "Member"),
       dateOfBirth: profile?.date_of_birth ?? null,
       age: profileAge,
       gender: profile?.gender ?? null,

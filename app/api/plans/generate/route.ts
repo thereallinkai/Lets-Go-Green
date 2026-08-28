@@ -231,9 +231,26 @@ export async function POST(request: Request) {
       preferencesResult,
       warningsResult,
     ] = await Promise.all([
-      supabase.from("profiles").select("*").eq("user_id", user.id).single(),
-      supabase.from("goals").select("*").eq("user_id", user.id).eq("status", "active").order("created_at", { ascending: false }).limit(1).maybeSingle(),
-      supabase.from("weight_entries").select("*").eq("user_id", user.id).order("local_date", { ascending: true }),
+      supabase
+        .from("profiles")
+        .select(
+          "activity_level,age,allergies,date_of_birth,dietary_restrictions,gender,height_cm,onboarding_status,preferred_weight_unit,safety_context,time_zone,training_days_per_week",
+        )
+        .eq("user_id", user.id)
+        .single(),
+      supabase
+        .from("goals")
+        .select("id,goal_type,target_date,target_weight_kg")
+        .eq("user_id", user.id)
+        .eq("status", "active")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from("weight_entries")
+        .select("is_onboarding_baseline,weight_kg")
+        .eq("user_id", user.id)
+        .order("local_date", { ascending: true }),
       supabase.from("meal_preferences").select("food_id,meal_type,sort_order").eq("user_id", user.id).order("sort_order"),
       supabase.from("onboarding_warnings").select("warning_code").eq("user_id", user.id),
     ]);
@@ -536,7 +553,9 @@ export async function POST(request: Request) {
         sanitized_error_code: code,
       })
       .eq("id", generationRequest.id)
-      .eq("user_id", user.id);
+      .eq("user_id", user.id)
+      .eq("status", "processing")
+      .is("plan_id", null);
     return publicError(
       classifyPlanGenerationFailure(code as PlanGenerationFailureCode),
     );

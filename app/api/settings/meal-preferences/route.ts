@@ -1,12 +1,13 @@
 import { z } from "zod";
 import { apiError, apiSuccess } from "@/src/lib/api-response";
 import { isAuthSessionMissing } from "@/src/lib/auth-error-taxonomy";
+import { PRIMARY_MEAL_TYPES } from "@/src/lib/domain/meal-slots";
 import { isDevelopmentDemo } from "@/src/lib/env";
 import { createSupabaseServerClient } from "@/src/lib/supabase/server";
 
 const preferenceMutationSchema = z
   .object({
-    mealType: z.enum(["breakfast", "lunch", "dinner"]),
+    mealType: z.enum(PRIMARY_MEAL_TYPES),
     foodId: z
       .string()
       .trim()
