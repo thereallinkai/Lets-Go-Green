@@ -21,6 +21,7 @@ import {
   clientApiError,
 } from "@/src/lib/client-api-error";
 import type { ApiError } from "@/src/lib/api-response";
+import type { PrimaryMealType } from "@/src/lib/domain/meal-slots";
 
 export type SettingsGoalType =
   | "fat_loss"
@@ -51,7 +52,7 @@ export type SettingsInitialData = {
     targetDate: string;
   } | null;
   mealPreferences: Array<{
-    mealType: "breakfast" | "lunch" | "dinner";
+    mealType: PrimaryMealType;
     foodId: string;
     foodName: string;
     sortOrder: number;

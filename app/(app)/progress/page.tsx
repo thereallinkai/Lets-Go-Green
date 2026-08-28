@@ -5,32 +5,32 @@ import {
   type ProgressEntry,
 } from "@/components/progress-view";
 import { isDevelopmentDemo } from "@/src/lib/env";
-import { createSupabaseServerClient } from "@/src/lib/supabase/server";
+import {
+  createSupabaseServerClient,
+  getCurrentProfile,
+  getCurrentUser,
+} from "@/src/lib/supabase/server";
 
 export const metadata: Metadata = { title: "Progress" };
 
 export default async function ProgressPage() {
   if (isDevelopmentDemo()) return <ProgressView />;
 
+  const user = await getCurrentUser();
+  if (!user) return <ProgressView initialEntries={[]} />;
   const supabase = await createSupabaseServerClient();
-  const { data: auth } = await supabase.auth.getUser();
-  if (!auth.user) return <ProgressView initialEntries={[]} />;
 
   const [weights, profile, goal] = await Promise.all([
     supabase
       .from("weight_entries")
       .select("id,local_date,weight_kg,is_onboarding_baseline")
-      .eq("user_id", auth.user.id)
+      .eq("user_id", user.id)
       .order("local_date", { ascending: false }),
-    supabase
-      .from("profiles")
-      .select("preferred_weight_unit,time_zone")
-      .eq("user_id", auth.user.id)
-      .single(),
+    getCurrentProfile(user.id),
     supabase
       .from("goals")
       .select("target_weight_kg")
-      .eq("user_id", auth.user.id)
+      .eq("user_id", user.id)
       .eq("status", "active")
       .maybeSingle(),
   ]);

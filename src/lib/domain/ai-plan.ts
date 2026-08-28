@@ -4,7 +4,7 @@ import {
   evaluateFoodEligibility,
   type FoodEligibilityProfile,
 } from "./food-filter";
-import { MEAL_TYPES } from "./meal-guidance";
+import { PRIMARY_MEAL_TYPES } from "./meal-slots";
 import {
   MEASUREMENT_BASES,
   type MeasurementBasis,
@@ -14,7 +14,7 @@ import {
 
 export const AI_PLAN_SCHEMA_VERSION = "1.0" as const;
 
-const mealTypeSchema = z.enum(MEAL_TYPES);
+const mealTypeSchema = z.enum(PRIMARY_MEAL_TYPES);
 const measurementBasisSchema = z.enum(MEASUREMENT_BASES);
 
 export const aiPlanItemSchema = z
@@ -58,7 +58,7 @@ export const aiPlanDaySchema = z
   })
   .strict()
   .superRefine((day, context) => {
-    for (const mealType of MEAL_TYPES) {
+    for (const mealType of PRIMARY_MEAL_TYPES) {
       if (day.meals.filter((meal) => meal.mealType === mealType).length !== 1) {
         context.addIssue({
           code: "custom",

@@ -21,7 +21,11 @@ import {
   type MealSlot,
 } from "@/src/lib/domain";
 import { isDevelopmentDemo } from "@/src/lib/env";
-import { createSupabaseServerClient } from "@/src/lib/supabase/server";
+import {
+  createSupabaseServerClient,
+  getCurrentProfile,
+  getCurrentUser,
+} from "@/src/lib/supabase/server";
 
 export const metadata: Metadata = { title: "Today" };
 
@@ -39,35 +43,41 @@ function todayLoadError() {
 export default async function TodayPage() {
   if (isDevelopmentDemo()) return <TodayDashboard />;
 
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
   const supabase = await createSupabaseServerClient();
-  const { data: auth, error: authError } = await supabase.auth.getUser();
-  if (authError || !auth.user) redirect("/login");
 
-  const [profileResult, goalResult, weightsResult, planResult] =
+  const [
+    profileResult,
+    goalResult,
+    weightsResult,
+    baselineWeightResult,
+    planResult,
+  ] =
     await Promise.all([
-      supabase
-        .from("profiles")
-        .select(
-          "full_name,time_zone,age,date_of_birth,height_cm,gender,activity_level,safety_context",
-        )
-        .eq("user_id", auth.user.id)
-        .single(),
+      getCurrentProfile(user.id),
       supabase
         .from("goals")
         .select("goal_type,target_weight_kg,target_date,plan_start_date")
-        .eq("user_id", auth.user.id)
+        .eq("user_id", user.id)
         .eq("status", "active")
         .maybeSingle(),
       supabase
         .from("weight_entries")
-        .select("local_date,weight_kg,is_onboarding_baseline")
-        .eq("user_id", auth.user.id)
+        .select("local_date,weight_kg")
+        .eq("user_id", user.id)
         .order("local_date", { ascending: false })
         .limit(30),
       supabase
+        .from("weight_entries")
+        .select("weight_kg")
+        .eq("user_id", user.id)
+        .eq("is_onboarding_baseline", true)
+        .maybeSingle(),
+      supabase
         .from("plans")
         .select("id,provider,model")
-        .eq("user_id", auth.user.id)
+        .eq("user_id", user.id)
         .eq("status", "accepted")
         .order("accepted_at", { ascending: false })
         .limit(1)
@@ -75,8 +85,10 @@ export default async function TodayPage() {
     ]);
   if (
     profileResult.error ||
+    !profileResult.data ||
     goalResult.error ||
     weightsResult.error ||
+    baselineWeightResult.error ||
     planResult.error
   ) {
     return todayLoadError();
@@ -99,14 +111,14 @@ export default async function TodayPage() {
       .select(
         "id,meal_type,status,skip_reason",
       )
-      .eq("user_id", auth.user.id)
+      .eq("user_id", user.id)
       .eq("local_date", today),
     supabase
       .from("daily_meal_checkins")
       .select(
         "local_date,meal_type,status",
       )
-      .eq("user_id", auth.user.id)
+      .eq("user_id", user.id)
       .gte("local_date", weekStart)
       .lte("local_date", today),
   ]);
@@ -161,8 +173,7 @@ export default async function TodayPage() {
 
   const weights = weightsResult.data ?? [];
   const latestWeight = weights[0]?.weight_kg ?? null;
-  const baseline =
-    weights.find((entry) => entry.is_onboarding_baseline)?.weight_kg ?? null;
+  const baseline = baselineWeightResult.data?.weight_kg ?? null;
   const activityMap = {
     sedentary: "sedentary",
     lightly_active: "light",
@@ -224,7 +235,7 @@ export default async function TodayPage() {
         .select(
           "id,meal_checkin_id,food:foods(id,english_name,verification_status)",
         )
-        .eq("user_id", auth.user.id)
+        .eq("user_id", user.id)
         .in("meal_checkin_id", todayMealIds)
         .order("sort_order")
     : { data: [], error: null };

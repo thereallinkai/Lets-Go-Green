@@ -1862,6 +1862,17 @@ details.message-box[open] > summary {
   height: 180px;
 }
 
+.lazy-chart-container,
+.chart-loading-placeholder {
+  width: 100%;
+  height: 100%;
+}
+
+.chart-loading-placeholder {
+  border-radius: 12px;
+  background: linear-gradient(180deg, transparent, rgb(100 118 50 / 5%));
+}
+
 .chart-alt {
   margin: 0.7rem 0 0;
   color: #68736f;

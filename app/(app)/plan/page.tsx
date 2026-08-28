@@ -17,7 +17,10 @@ import {
 } from "@/src/lib/domain";
 import { isDevelopmentDemo } from "@/src/lib/env";
 import { readPlanSnapshotWeight } from "@/src/lib/plan-snapshot";
-import { createSupabaseServerClient } from "@/src/lib/supabase/server";
+import {
+  createSupabaseServerClient,
+  getCurrentUser,
+} from "@/src/lib/supabase/server";
 import type { Json, Tables } from "@/src/types/database";
 
 export const metadata: Metadata = { title: "My Plan" };
@@ -209,16 +212,16 @@ export default async function PlanPage({
 }) {
   if (isDevelopmentDemo()) return <PlanView />;
 
+  const user = await getCurrentUser();
+  if (!user) return emptyPlan();
   const supabase = await createSupabaseServerClient();
-  const { data: auth } = await supabase.auth.getUser();
-  if (!auth.user) return emptyPlan();
 
   const { data: plans, error: plansError } = await supabase
     .from("plans")
     .select(
       "id,accepted_at,created_at,goal_id,input_snapshot,model,prompt_version,provider,status,updated_at,user_id,validated_output_snapshot,version",
     )
-    .eq("user_id", auth.user.id)
+    .eq("user_id", user.id)
     .order("version", { ascending: false })
     .limit(50);
   if (plansError) return <PlanLoadError />;
@@ -262,12 +265,12 @@ export default async function PlanPage({
       .from("goals")
       .select("id,target_weight_kg")
       .eq("id", selectedPlan.goal_id)
-      .eq("user_id", auth.user.id)
+      .eq("user_id", user.id)
       .maybeSingle(),
     supabase
       .from("weight_entries")
       .select("weight_kg")
-      .eq("user_id", auth.user.id)
+      .eq("user_id", user.id)
       .eq("is_onboarding_baseline", true)
       .maybeSingle(),
   ]);

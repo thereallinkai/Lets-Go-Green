@@ -8,7 +8,12 @@ import {
   getAIProviderMode,
   isDevelopmentDemo,
 } from "@/src/lib/env";
-import { createSupabaseServerClient } from "@/src/lib/supabase/server";
+import { isPrimaryMealType } from "@/src/lib/domain/meal-slots";
+import {
+  createSupabaseServerClient,
+  getCurrentProfile,
+  getCurrentUser,
+} from "@/src/lib/supabase/server";
 
 export const metadata: Metadata = { title: "Settings" };
 
@@ -65,11 +70,11 @@ export default async function SettingsPage() {
     return <SettingsView initialData={demoSettings} />;
   }
 
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
   const supabase = await createSupabaseServerClient();
-  const { data: auth, error: authError } = await supabase.auth.getUser();
-  if (authError || !auth.user) redirect("/login");
 
-  const userId = auth.user.id;
+  const userId = user.id;
   const [
     profileResult,
     goalResult,
@@ -77,13 +82,7 @@ export default async function SettingsPage() {
     privateFoodsResult,
     activeLabelDraftsResult,
   ] = await Promise.all([
-    supabase
-      .from("profiles")
-      .select(
-        "full_name,preferred_weight_unit,time_zone,allergies,dietary_restrictions,disliked_foods,training_days_per_week,safety_context",
-      )
-      .eq("user_id", userId)
-      .maybeSingle(),
+    getCurrentProfile(userId),
     supabase
       .from("goals")
       .select("id,goal_type,target_weight_kg,target_date")
@@ -166,13 +165,13 @@ export default async function SettingsPage() {
   const initialData: SettingsInitialData = {
     mode: "authenticated",
     account: {
-      email: auth.user.email ?? "Email unavailable",
-      createdAt: auth.user.created_at,
+      email: user.email ?? "Email unavailable",
+      createdAt: user.created_at,
     },
     profile: {
       fullName:
         profile?.full_name ??
-        String(auth.user.user_metadata.full_name ?? "Member"),
+        String(user.user_metadata.full_name ?? "Member"),
       preferredWeightUnit: profile?.preferred_weight_unit ?? "kg",
       timeZone: profile?.time_zone ?? "UTC",
       allergies: profile?.allergies ?? [],
@@ -190,13 +189,10 @@ export default async function SettingsPage() {
         }
       : null,
     mealPreferences: (mealPreferencesResult.data ?? []).flatMap((preference) =>
-      ["breakfast", "lunch", "dinner"].includes(preference.meal_type)
+      isPrimaryMealType(preference.meal_type)
         ? [
             {
-              mealType: preference.meal_type as
-                | "breakfast"
-                | "lunch"
-                | "dinner",
+              mealType: preference.meal_type,
               foodId: preference.food_id,
               foodName:
                 preferenceFoodNames.get(preference.food_id) ??

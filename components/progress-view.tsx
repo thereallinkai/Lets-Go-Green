@@ -4,19 +4,11 @@ import { useMemo, useState } from "react";
 import { Edit3, Scale, Trash2, TrendingDown } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { ApiErrorNotice } from "@/components/api-error-notice";
-import {
-  CartesianGrid,
-  Line,
-  LineChart,
-  ReferenceLine,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
+import { LazyWeightTrendChart } from "@/components/lazy-weight-trend-chart";
 import {
   addLocalDays,
   buildSevenDayRollingAverageSeries,
+  convertWeight,
   localDateInTimeZone,
 } from "@/src/lib/domain";
 import type { ApiError } from "@/src/lib/api-response";
@@ -26,7 +18,6 @@ import {
   clientApiError,
 } from "@/src/lib/client-api-error";
 
-const KG_TO_LB = 2.2046226218;
 const RANGE_OPTIONS = [
   { key: "4-weeks", label: "4 weeks", days: 28 },
   { key: "12-weeks", label: "12 weeks", days: 84 },
@@ -61,7 +52,7 @@ function labelForDate(isoDate: string) {
 }
 
 function displayWeight(kg: number, unit: "kg" | "lb") {
-  const amount = unit === "kg" ? kg : kg * KG_TO_LB;
+  const amount = convertWeight(kg, "kg", unit);
   return `${amount.toFixed(1)} ${unit}`;
 }
 
@@ -123,7 +114,6 @@ export function ProgressView({
   );
   const latestRollingAverage =
     rollingAveragePoints.at(-1)?.rollingAverage ?? null;
-  const hasSevenDayTrend = latestRollingAverage !== null;
   const latest = entries[0] ?? null;
   const start = baselineKg ?? entries.at(-1)?.kg ?? null;
   const change = latest && start !== null ? latest.kg - start : null;
@@ -142,7 +132,7 @@ export function ProgressView({
       setMessage("Enter a valid weight greater than zero.");
       return;
     }
-    const kg = unit === "kg" ? parsed : parsed / KG_TO_LB;
+    const kg = convertWeight(parsed, unit, "kg");
     const fallback = clientApiError(
       "WEIGHT_SAVE_UNAVAILABLE",
       "The weight entry could not be saved.",
@@ -255,9 +245,7 @@ export function ProgressView({
     }
     setEditingId(entry.id);
     setOperationError(null);
-    setValue(
-      (unit === "kg" ? entry.kg : entry.kg * KG_TO_LB).toFixed(1),
-    );
+    setValue(convertWeight(entry.kg, "kg", unit).toFixed(1));
     setMessage(`Editing the ${entry.date} entry.`);
   }
 
@@ -271,10 +259,7 @@ export function ProgressView({
     if (value) {
       const numeric = Number(value);
       if (Number.isFinite(numeric)) {
-        const converted =
-          nextUnit === "lb"
-            ? numeric * KG_TO_LB
-            : numeric / KG_TO_LB;
+        const converted = convertWeight(numeric, unit, nextUnit);
         setValue(converted.toFixed(1));
       }
     }
@@ -367,28 +352,11 @@ export function ProgressView({
                   role="img"
                   aria-label={`${visibleEntries.length} weight reading${visibleEntries.length === 1 ? " is" : "s are"} shown for ${selectedRange.label}. Missing dates remain gaps, never zero.`}
                 >
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={chartData} margin={{ top: 10, right: 18, left: -4, bottom: 0 }}>
-                      <CartesianGrid stroke="#e3dfd5" vertical={false} />
-                      <XAxis dataKey="day" axisLine={false} tickLine={false} fontSize={11} />
-                      <YAxis domain={["dataMin - 1", "dataMax + 1"]} axisLine={false} tickLine={false} fontSize={11} />
-                      <Tooltip formatter={(item, name) => [`${Number(item).toFixed(1)} kg`, name === "7-day average" ? "7-day average" : "Weight"]} />
-                      {targetKg !== null ? <ReferenceLine y={targetKg} stroke="#829248" strokeDasharray="5 5" label={{ value: "Goal", fontSize: 10 }} /> : null}
-                      <Line name="Weight" type="monotone" dataKey="weight" stroke="#647632" strokeWidth={2.5} connectNulls={false} />
-                      {hasSevenDayTrend ? (
-                        <Line
-                          name="7-day average"
-                          type="monotone"
-                          dataKey="rollingAverage"
-                          stroke="#315f62"
-                          strokeDasharray="5 4"
-                          strokeWidth={2}
-                          dot={false}
-                          connectNulls={false}
-                        />
-                      ) : null}
-                    </LineChart>
-                  </ResponsiveContainer>
+                  <LazyWeightTrendChart
+                    data={chartData}
+                    kind="progress"
+                    targetKg={targetKg}
+                  />
                 </div>
                 <p className="chart-alt">
                   {visibleEntries.length} reading{visibleEntries.length === 1 ? " is" : "s are"} available in this range. Missing dates remain gaps. Changes can reflect hydration, digestion, and other factors.
@@ -436,7 +404,7 @@ export function ProgressView({
               </div>
               {value && Number.isFinite(Number(value)) ? (
                 <p className="field-help">
-                  Equivalent: {unit === "kg" ? (Number(value) * KG_TO_LB).toFixed(1) : (Number(value) / KG_TO_LB).toFixed(1)} {unit === "kg" ? "lb" : "kg"}
+                  Equivalent: {convertWeight(Number(value), unit, unit === "kg" ? "lb" : "kg").toFixed(1)} {unit === "kg" ? "lb" : "kg"}
                 </p>
               ) : null}
               {todayIsProtectedBaseline && !editingId ? (

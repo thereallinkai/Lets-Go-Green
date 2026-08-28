@@ -25,17 +25,8 @@ import {
   Utensils,
   X,
 } from "lucide-react";
-import {
-  CartesianGrid,
-  Line,
-  LineChart,
-  ReferenceLine,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 import { ApiErrorNotice } from "@/components/api-error-notice";
+import { LazyWeightTrendChart } from "@/components/lazy-weight-trend-chart";
 import { NutritionFactsCard } from "@/components/nutrition-facts-card";
 import type { ApiError } from "@/src/lib/api-response";
 import {
@@ -1170,26 +1161,7 @@ export function TodayDashboard({
               role="img"
               aria-label={`${weightPoints.length} recent weight readings are shown with missing dates left as gaps.`}
             >
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={weightPoints} margin={{ top: 10, right: 12, left: -20, bottom: 0 }}>
-                  <CartesianGrid stroke="#e3dfd5" vertical={false} />
-                  <XAxis dataKey="day" axisLine={false} tickLine={false} fontSize={11} />
-                  <YAxis domain={["dataMin - 1", "dataMax + 1"]} axisLine={false} tickLine={false} fontSize={11} />
-                  <Tooltip
-                    formatter={(value) => [`${Number(value).toFixed(1)} kg`, "Weight"]}
-                    contentStyle={{ borderRadius: 10, borderColor: "#d9d4c8", fontSize: 12 }}
-                  />
-                  {weightPoints.length ? <ReferenceLine y={weightPoints.at(-1)?.weight} stroke="#aeb7ad" strokeDasharray="4 4" /> : null}
-                  <Line
-                    type="monotone"
-                    dataKey="weight"
-                    stroke="#647632"
-                    strokeWidth={2.5}
-                    dot={{ fill: "#647632", r: 3 }}
-                    activeDot={{ r: 5 }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
+              <LazyWeightTrendChart data={weightPoints} kind="today" />
             </div>
             <p className="chart-alt">
               {weightPoints.length
