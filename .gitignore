@@ -45,6 +45,7 @@ next-env.d.ts
 /dist/
 /outputs/
 /work/
+/Let's Go Green Local.app/
 /public/ocr-runtime/
 
 # local Supabase CLI state

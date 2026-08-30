@@ -3,10 +3,11 @@ set -Eeuo pipefail
 
 readonly SCRIPT_DIR="${0:A:h}"
 readonly PROJECT_DIR="${SCRIPT_DIR:h}"
-readonly TARGET_DIR="${PROJECT_DIR}/work/local-launcher"
 readonly APP_NAME="Let's Go Green Local.app"
-readonly APP_PATH="${TARGET_DIR}/${APP_NAME}"
-readonly LEGACY_COMMAND="${TARGET_DIR}/Start Lets Go Green.command"
+readonly APP_PATH="${PROJECT_DIR}/${APP_NAME}"
+readonly LEGACY_LAUNCHER_DIR="${PROJECT_DIR}/work/local-launcher"
+readonly LEGACY_APP_PATH="${LEGACY_LAUNCHER_DIR}/${APP_NAME}"
+readonly LEGACY_COMMAND="${LEGACY_LAUNCHER_DIR}/Start Lets Go Green.command"
 
 command -v osacompile >/dev/null 2>&1 \
   || { printf 'ERROR: The one-click launcher can only be installed on macOS.\n' >&2; exit 1; }
@@ -26,7 +27,7 @@ cat > "$SOURCE_PATH" <<'APPLESCRIPT'
 on run
 	set appPath to POSIX path of (path to me)
 	set launcherDirectory to do shell script "/usr/bin/dirname " & quoted form of appPath
-	set projectDirectory to do shell script "cd " & quoted form of (launcherDirectory & "/../..") & " && /bin/pwd -P"
+	set projectDirectory to do shell script "cd " & quoted form of launcherDirectory & " && /bin/pwd -P"
 	set launcherPath to projectDirectory & "/scripts/launch-native-app"
 	tell application "Terminal"
 		activate
@@ -35,7 +36,6 @@ on run
 end run
 APPLESCRIPT
 
-mkdir -p "$TARGET_DIR"
 /usr/bin/osacompile -o "$COMPILED_APP" "$SOURCE_PATH"
 
 readonly PLIST="${COMPILED_APP}/Contents/Info.plist"
@@ -60,10 +60,13 @@ done
 /usr/bin/codesign --force --deep --sign - "$COMPILED_APP" >/dev/null
 /usr/bin/codesign --verify --deep --strict "$COMPILED_APP"
 
-# Compilation and signing finish before the active Dock target is replaced.
+# Compilation and signing finish before the existing launcher is replaced.
 rm -rf "$APP_PATH"
 mv "$COMPILED_APP" "$APP_PATH"
+rm -rf "$LEGACY_APP_PATH"
 rm -f "$LEGACY_COMMAND"
+rmdir "$LEGACY_LAUNCHER_DIR" 2>/dev/null || true
+rmdir "${PROJECT_DIR}/work" 2>/dev/null || true
 
 printf 'Installed the one-click launcher at:\n%s\n' "$APP_PATH"
-printf 'If it is not already in the Dock, drag this app there once.\n'
+printf 'Double-click it from the project folder whenever you want to test locally.\n'
