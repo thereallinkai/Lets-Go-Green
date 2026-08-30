@@ -7,7 +7,6 @@ import {
   Sparkles,
 } from "lucide-react";
 import { BrandLink } from "@/components/brand-link";
-import { Button } from "@/components/ui/button";
 import { BRAND } from "@/src/lib/brand";
 
 const benefits = [
@@ -37,9 +36,9 @@ export default function Home() {
           <Link className="text-link" href="/login">
             Log in
           </Link>
-          <Button asChild size="sm">
-            <Link href="/register">Create account</Link>
-          </Button>
+          <Link className="button button-dark button-small" href="/register">
+            Create account
+          </Link>
         </nav>
       </header>
 
@@ -52,14 +51,12 @@ export default function Home() {
             weight-trend context—built around your preferences and your pace.
           </p>
           <div className="hero-actions">
-            <Button asChild variant="accent">
-              <Link href="/register">
-                Create your plan <ArrowRight size={18} aria-hidden="true" />
-              </Link>
-            </Button>
-            <Button asChild variant="outline">
-              <Link href="/login">I already have an account</Link>
-            </Button>
+            <Link className="button button-accent" href="/register">
+              Create your plan <ArrowRight size={18} aria-hidden="true" />
+            </Link>
+            <Link className="button button-quiet" href="/login">
+              I already have an account
+            </Link>
           </div>
           <p className="microcopy">
             General wellness information only. No outcome promises, shame, or

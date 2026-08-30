@@ -1,5 +1,5 @@
 import type { PropsWithChildren } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -39,6 +39,15 @@ const rangedEntries = [
   { id: "all-time", date: "Mar 1", isoDate: "2026-03-01", kg: 83 },
 ];
 
+const persistedEntryId = "00000000-0000-4000-8000-000000000201";
+
+function savedWeightResponse() {
+  return {
+    ok: true,
+    json: async () => ({ data: { id: persistedEntryId } }),
+  };
+}
+
 describe("ProgressView weight entry", () => {
   it("shows the converted value and synchronizes the input when units change", async () => {
     const user = userEvent.setup();
@@ -71,8 +80,8 @@ describe("ProgressView weight entry", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("saves the source value and unit, then clears the form", async () => {
-    const fetchMock = vi.fn(async () => ({ ok: true }));
+  it("saves the source value and unit, reconciles the persisted id, then clears the form", async () => {
+    const fetchMock = vi.fn(async () => savedWeightResponse());
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
     const expectedLocalDate = localDateInTimeZone(
@@ -100,6 +109,81 @@ describe("ProgressView weight entry", () => {
         }),
       }),
     );
+
+    const dateLabel = new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+      timeZone: "UTC",
+    }).format(new Date(`${expectedLocalDate}T12:00:00Z`));
+    await user.click(
+      screen.getByRole("button", { name: `Edit weight for ${dateLabel}` }),
+    );
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      `/api/weights/${persistedEntryId}`,
+      expect.objectContaining({ method: "PUT" }),
+    );
+  });
+
+  it("rejects a bodyless create response instead of retaining an optimistic id", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true })));
+    const user = userEvent.setup();
+    render(<ProgressView initialEntries={[]} />);
+
+    await user.type(screen.getByRole("textbox", { name: "Weight" }), "79.5");
+    await user.click(screen.getByRole("button", { name: "Save entry" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "The saved entry could not be confirmed. Refresh Progress before trying again.",
+      ),
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Error code: WEIGHT_SAVE_RESPONSE_INVALID",
+    );
+    expect(screen.getByText("No weight entries yet.")).toBeInTheDocument();
+  });
+
+  it("allows only one mutation request and disables every weight mutator while it is pending", async () => {
+    let resolveRequest!: (response: ReturnType<typeof savedWeightResponse>) => void;
+    const pendingResponse = new Promise<ReturnType<typeof savedWeightResponse>>(
+      (resolve) => {
+        resolveRequest = resolve;
+      },
+    );
+    const fetchMock = vi.fn(() => pendingResponse);
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<ProgressView />);
+
+    const input = screen.getByRole("textbox", { name: "Weight" });
+    const unit = screen.getByRole("combobox", { name: "Unit" });
+    const saveButton = screen.getByRole("button", { name: "Save entry" });
+    const form = saveButton.closest("form");
+    expect(form).not.toBeNull();
+
+    await user.type(input, "79.5");
+    fireEvent.submit(form!);
+    fireEvent.submit(form!);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(input).toBeDisabled();
+    expect(unit).toBeDisabled();
+    expect(saveButton).toBeDisabled();
+    for (const button of screen.getAllByRole("button", {
+      name: /^(Edit|Delete) weight for /,
+    })) {
+      expect(button).toBeDisabled();
+    }
+
+    await act(async () => {
+      resolveRequest(savedWeightResponse());
+      await pendingResponse;
+    });
+    await waitFor(() => expect(saveButton).toBeEnabled());
   });
 
   it("restores the previous history when persistence fails", async () => {
@@ -219,6 +303,41 @@ describe("ProgressView history and trends", () => {
     expect(
       screen.getByRole("button", { name: "Delete weight for Jul 24" }),
     ).toBeInTheDocument();
+  });
+
+  it("can retry a delete after its successful server response was lost", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("response lost"))
+      .mockResolvedValueOnce({ ok: true });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<ProgressView />);
+
+    await user.click(
+      screen.getByRole("button", { name: "Delete weight for Jul 24" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Delete entry" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Delete weight for Jul 24" }),
+      ).toBeInTheDocument(),
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Delete weight for Jul 24" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Delete entry" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Removed the Jul 24 entry.",
+      ),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Delete weight for Jul 24" }),
+    ).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("filters both chart and history with honest range controls", async () => {

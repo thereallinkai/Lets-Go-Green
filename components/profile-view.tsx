@@ -19,6 +19,10 @@ import {
   PRODUCT_TOUR_REPLAY_REQUEST_KEY,
 } from "@/src/lib/product-tour";
 import { parseLocalDate } from "@/src/lib/domain/dates";
+import {
+  GOAL_TYPE_LABELS,
+  type GoalType,
+} from "@/src/lib/domain/goals";
 import { convertWeight } from "@/src/lib/domain/units";
 
 type ProfileViewData = {
@@ -55,11 +59,7 @@ type ProfileViewData = {
     onboardingCompletedAt: string | null;
   };
   goal: {
-    goalType:
-      | "fat_loss"
-      | "muscle_gain"
-      | "maintenance"
-      | "body_recomposition";
+    goalType: GoalType;
     targetWeightKg: number;
     targetDate: string;
   } | null;
@@ -81,13 +81,6 @@ const activityLabels = {
   moderately_active: "Moderately active",
   very_active: "Highly active",
   extremely_active: "Very highly active",
-} as const;
-
-const goalLabels = {
-  fat_loss: "Fat loss",
-  muscle_gain: "Muscle gain",
-  maintenance: "Maintenance",
-  body_recomposition: "Body recomposition",
 } as const;
 
 const shoppingSearches = [
@@ -305,7 +298,7 @@ export function ProfileView({ data }: { data: ProfileViewData }) {
             <div className="profile-goal">
               <div>
                 <span>Active direction</span>
-                <strong>{goalLabels[goal.goalType]}</strong>
+                <strong>{GOAL_TYPE_LABELS[goal.goalType]}</strong>
               </div>
               <div>
                 <span>Target</span>

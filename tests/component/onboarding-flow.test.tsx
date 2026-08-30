@@ -203,6 +203,75 @@ describe("OnboardingFlow navigation and restoration", () => {
     expect(screen.getByLabelText("Target weight")).toHaveValue("76");
   });
 
+  it.each([
+    ["Fat loss", "fat_loss", "80", "90"],
+    ["Muscle gain", "muscle_gain", "80", "70"],
+    ["Maintenance", "maintenance", "80", "79"],
+  ])(
+    "keeps a contradictory %s target on the goal step",
+    async (goalLabel, goalType, currentWeight, targetWeight) => {
+      window.localStorage.setItem(
+        ONBOARDING_DRAFT_KEY,
+        storedDraft(
+          completionDraft({
+            currentWeight,
+            goalType,
+            targetWeight,
+            unit: "kg",
+          }),
+          Date.now(),
+        ),
+      );
+      const user = userEvent.setup();
+      render(<OnboardingFlow initialStep={4} />);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Current weight")).toHaveValue(
+          currentWeight,
+        );
+        expect(screen.getByLabelText("Target weight")).toHaveValue(
+          targetWeight,
+        );
+        expect(screen.getByRole("radio", { name: goalLabel })).toBeChecked();
+      });
+      expect(
+        screen.getByText(/The target direction conflicts with the selected goal/),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("group", { name: "Wellness goal" }),
+      ).toHaveAccessibleDescription(/target direction conflicts/i);
+      expect(
+        screen
+          .getByText(/The target direction conflicts with the selected goal/)
+          .closest('[role="status"]'),
+      ).toHaveAttribute(
+        "id",
+        "onboarding-goal-direction-guidance",
+      );
+      expect(screen.getByRole("radio", { name: goalLabel })).toHaveAttribute(
+        "aria-invalid",
+        "true",
+      );
+      expect(screen.getByLabelText("Target weight")).toHaveAttribute(
+        "aria-describedby",
+        "onboarding-goal-direction-guidance",
+      );
+
+      await user.click(screen.getByRole("button", { name: /Continue/ }));
+
+      expect(
+        screen.getByRole("heading", {
+          name: "Set a direction, not a promise.",
+        }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "Choose a goal type that matches the target-weight direction.",
+        ),
+      ).toBeInTheDocument();
+    },
+  );
+
   it("removes unscoped legacy drafts instead of exposing them to another account", async () => {
     window.localStorage.setItem(
       "lets-go-green-onboarding-draft",
@@ -1503,6 +1572,61 @@ describe("OnboardingFlow completion", () => {
     expect(secondKey).not.toBe(firstKey);
   });
 
+  it("reuses the idempotency key after an ambiguous server response", async () => {
+    window.localStorage.setItem(
+      ONBOARDING_DRAFT_KEY,
+      JSON.stringify(completionDraft()),
+    );
+    const fetchMock = mockCompletionRequests({
+      generationResponses: [
+        jsonResponse({ data: null, error: null }, 503),
+        jsonResponse(
+          {
+            data: {
+              requestId: "request-1",
+              planId: "plan-1",
+              status: "succeeded",
+              replayed: true,
+            },
+            error: null,
+          },
+          201,
+        ),
+      ],
+    });
+    const user = userEvent.setup();
+    render(<OnboardingFlow initialStep={6} />);
+
+    await screen.findByText("fat loss · 210 lb → 200 lb · 2026-08-31");
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "I have reviewed this information and want to complete onboarding.",
+      }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: /Generate my plan/ }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "PLAN_RESPONSE_UNCONFIRMED",
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: /Generate my plan/ }),
+    );
+    await waitFor(() => expect(router.push).toHaveBeenCalledWith("/plan"));
+
+    const generationCalls = fetchMock.mock.calls.filter(
+      ([input, init]) =>
+        String(input).endsWith("/api/plans/generate") &&
+        init?.method === "POST",
+    );
+    expect(generationCalls).toHaveLength(2);
+    const requestKeys = generationCalls.map(([, init]) =>
+      JSON.parse(String(init?.body)).idempotencyKey,
+    );
+    expect(requestKeys[1]).toBe(requestKeys[0]);
+  });
+
   it("reuses the completed profile and generation key after a network failure and reload", async () => {
     window.localStorage.setItem(
       ONBOARDING_DRAFT_KEY,
@@ -1592,7 +1716,7 @@ describe("OnboardingFlow completion", () => {
     );
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Plan generation could not start.",
+      "The plan request outcome could not be confirmed.",
     );
     const recovery = JSON.parse(
       window.localStorage.getItem(ONBOARDING_DRAFT_KEY) ?? "{}",

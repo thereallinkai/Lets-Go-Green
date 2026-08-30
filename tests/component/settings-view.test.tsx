@@ -43,6 +43,7 @@ import {
 
 const initialData: SettingsInitialData = {
   mode: "authenticated",
+  release: { channelLabel: "Beta 6", displayVersion: "v1.0.0-beta.6" },
   account: { email: "member@example.test", createdAt: null },
   profile: {
     fullName: "Member",
@@ -59,10 +60,118 @@ const initialData: SettingsInitialData = {
   privateLabelFoods: [],
   activeLabelDrafts: [],
   aiProviderMode: "mock",
-  loadError: null,
+  loadErrors: {
+    profile: null,
+    goal: null,
+    mealPreferences: null,
+    privateLabelFoods: null,
+    activeLabelDrafts: null,
+  },
 };
 
 describe("SettingsView", () => {
+  it("keeps unrelated settings editable when label lists are unavailable", () => {
+    render(
+      <SettingsView
+        initialData={{
+          ...initialData,
+          loadErrors: {
+            ...initialData.loadErrors,
+            activeLabelDrafts: "Private label drafts are unavailable.",
+            privateLabelFoods: "Saved private label foods are unavailable.",
+          },
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByText("Private label drafts are unavailable."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Saved private label foods are unavailable."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "No unfinished label drafts are using your upload allowance.",
+      ),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("No private label foods are stored yet."),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Save profile" }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Save preferences" }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Edit meal preferences" }),
+    ).toBeEnabled();
+  });
+
+  it("blocks only profile-backed forms when the profile load fails", () => {
+    render(
+      <SettingsView
+        initialData={{
+          ...initialData,
+          goal: {
+            id: "goal-1",
+            goalType: "maintenance",
+            targetWeightKg: 75,
+            targetDate: "2026-12-31",
+          },
+          loadErrors: {
+            ...initialData.loadErrors,
+            profile: "Profile settings are unavailable.",
+          },
+        }}
+      />,
+    );
+
+    expect(
+      screen.getAllByText("Profile settings are unavailable."),
+    ).toHaveLength(2);
+    expect(
+      screen.queryByRole("textbox", { name: "Full name" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Save preferences" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Save goal type" }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Edit meal preferences" }),
+    ).toBeEnabled();
+  });
+
+  it("shows unavailable meal preferences without blocking profile values", () => {
+    render(
+      <SettingsView
+        initialData={{
+          ...initialData,
+          loadErrors: {
+            ...initialData.loadErrors,
+            mealPreferences: "Meal preferences are unavailable.",
+          },
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByText("Meal preferences are unavailable."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Edit meal preferences" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Save profile" }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Save preferences" }),
+    ).toBeEnabled();
+  });
+
   it("keeps the user in place and shows the structured retryable reason", async () => {
     router.replace.mockReset();
     router.refresh.mockReset();

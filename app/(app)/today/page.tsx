@@ -1,23 +1,20 @@
 import type { Metadata } from "next";
-import { format, parseISO } from "date-fns";
 import { redirect } from "next/navigation";
 import { PageLoadError } from "@/components/page-load-error";
 import {
   TodayDashboard,
-  type TodayMealCheckin,
-  type TodayMealItem,
   type TodayWeightPoint,
 } from "@/components/today-dashboard";
+import { loadDayMealCheckins } from "@/src/lib/checkin-loader";
 import {
   PRIMARY_MEAL_TYPES,
   addLocalDays,
-  calculateNutritionEstimate,
+  assessGoalAwareNutrition,
+  formatLocalDate,
   localDateInTimeZone,
-  normalizeMealSlotCheckins,
   remainingDays,
   resolveProfileAge,
   resolvePlanDay,
-  type MealCheckinStatus,
   type MealSlot,
 } from "@/src/lib/domain";
 import { isDevelopmentDemo } from "@/src/lib/env";
@@ -29,6 +26,10 @@ import {
 
 export const metadata: Metadata = { title: "Today" };
 
+type TodaySupabaseClient = Awaited<
+  ReturnType<typeof createSupabaseServerClient>
+>;
+
 function todayLoadError() {
   return (
     <PageLoadError
@@ -38,6 +39,47 @@ function todayLoadError() {
       retryLabel="Reload Today"
     />
   );
+}
+
+async function loadPlanMealDetails(
+  supabase: TodaySupabaseClient,
+  planId: string,
+  dayIndex: number,
+) {
+  const result = await supabase
+    .from("plan_days")
+    .select(
+      "plan_meals(id,meal_type,sort_order,plan_items(sort_order,food:foods(english_name)))",
+    )
+    .eq("plan_id", planId)
+    .eq("day_index", dayIndex)
+    .maybeSingle();
+  if (result.error) {
+    return {
+      data: undefined as Partial<Record<MealSlot, string>> | undefined,
+      error: result.error,
+    };
+  }
+
+  const planMeals = [...(result.data?.plan_meals ?? [])].sort(
+    (left, right) => left.sort_order - right.sort_order,
+  );
+  return {
+    data: result.data
+      ? (Object.fromEntries(
+          planMeals.map((meal) => [
+            meal.meal_type,
+            [...(meal.plan_items ?? [])]
+              .sort((left, right) => left.sort_order - right.sort_order)
+              .flatMap((item) =>
+                item.food ? [item.food.english_name] : [],
+              )
+              .join(", ") || "No items in this meal.",
+          ]),
+        ) as Partial<Record<MealSlot, string>>)
+      : undefined,
+    error: null,
+  };
 }
 
 export default async function TodayPage() {
@@ -105,14 +147,25 @@ export default async function TodayPage() {
   }
   const weekday = new Date(`${today}T12:00:00Z`).getUTCDay();
   const weekStart = addLocalDays(today, -((weekday + 6) % 7));
-  const [checkinResult, weekResult] = await Promise.all([
-    supabase
-      .from("daily_meal_checkins")
-      .select(
-        "id,meal_type,status,skip_reason",
-      )
-      .eq("user_id", user.id)
-      .eq("local_date", today),
+  const resolvedPlanDay =
+    planResult.data && goal
+      ? resolvePlanDay(today, goal.plan_start_date)
+      : null;
+  const mealDetailsPromise =
+    planResult.data && resolvedPlanDay
+      ? loadPlanMealDetails(
+          supabase,
+          planResult.data.id,
+          resolvedPlanDay.dayIndex,
+        )
+      : Promise.resolve({
+          data: undefined as
+            | Partial<Record<MealSlot, string>>
+            | undefined,
+          error: null,
+        });
+  const [checkinResult, weekResult, mealDetailsResult] = await Promise.all([
+    loadDayMealCheckins(supabase, user.id, today),
     supabase
       .from("daily_meal_checkins")
       .select(
@@ -121,86 +174,36 @@ export default async function TodayPage() {
       .eq("user_id", user.id)
       .gte("local_date", weekStart)
       .lte("local_date", today),
+    mealDetailsPromise,
   ]);
-  if (checkinResult.error || weekResult.error) {
+  if (checkinResult.error || weekResult.error || mealDetailsResult.error) {
     return todayLoadError();
   }
-
-  let mealDetails: Partial<Record<MealSlot, string>> | undefined;
-  if (planResult.data && goal) {
-    const resolved = resolvePlanDay(today, goal.plan_start_date);
-    if (resolved) {
-      const planDayResult = await supabase
-        .from("plan_days")
-        .select("id")
-        .eq("plan_id", planResult.data.id)
-        .eq("day_index", resolved.dayIndex)
-        .maybeSingle();
-      if (planDayResult.error) return todayLoadError();
-      const planDay = planDayResult.data;
-      if (planDay) {
-        const planMealsResult = await supabase
-          .from("plan_meals")
-          .select("id,meal_type")
-          .eq("plan_day_id", planDay.id)
-          .order("sort_order");
-        if (planMealsResult.error) return todayLoadError();
-        const planMeals = planMealsResult.data;
-        const mealIds = (planMeals ?? []).map((meal) => meal.id);
-        const planItemsResult = mealIds.length
-          ? await supabase
-              .from("plan_items")
-              .select("plan_meal_id,sort_order,food:foods(english_name)")
-              .in("plan_meal_id", mealIds)
-              .order("sort_order")
-          : { data: [], error: null };
-        if (planItemsResult.error) return todayLoadError();
-        const planItems = planItemsResult.data;
-        mealDetails = Object.fromEntries(
-          (planMeals ?? []).map((meal) => [
-            meal.meal_type,
-            (planItems ?? [])
-              .filter((item) => item.plan_meal_id === meal.id)
-              .flatMap((item) =>
-                item.food ? [item.food.english_name] : [],
-              )
-              .join(", ") || "No items in this meal.",
-          ]),
-        );
-      }
-    }
-  }
+  const mealDetails = mealDetailsResult.data;
 
   const weights = weightsResult.data ?? [];
   const latestWeight = weights[0]?.weight_kg ?? null;
   const baseline = baselineWeightResult.data?.weight_kg ?? null;
-  const activityMap = {
-    sedentary: "sedentary",
-    lightly_active: "light",
-    moderately_active: "moderate",
-    very_active: "very_active",
-    extremely_active: "very_active",
-  } as const;
   const profileAge = profile
     ? resolveProfileAge(profile.date_of_birth, profile.age, today)
     : null;
-  const estimate =
+  const nutritionAssessment =
     goal && profile
-      ? calculateNutritionEstimate({
-          weightKg: latestWeight,
+      ? assessGoalAwareNutrition({
+          currentWeightKg: latestWeight,
+          startingWeightKg: baseline,
+          targetWeightKg: goal.target_weight_kg,
+          planStartDate: goal.plan_start_date,
+          targetDate: goal.target_date,
+          goalType: goal.goal_type,
           heightCm: profile.height_cm,
           ageYears: profileAge,
-          sexForEstimate:
-            profile.gender === "male" || profile.gender === "female"
-              ? profile.gender
-              : "unspecified",
-          activityLevel: profile.activity_level
-            ? activityMap[profile.activity_level]
-            : null,
-          goalType: goal.goal_type,
+          gender: profile.gender,
+          profileActivityLevel: profile.activity_level,
           relevantMedicalConcerns: Boolean(profile.safety_context),
         })
       : null;
+  const estimate = nutritionAssessment?.estimate ?? null;
   const weeklyPrimary = (weekResult.data ?? []).filter((checkin) =>
     PRIMARY_MEAL_TYPES.includes(
       checkin.meal_type as (typeof PRIMARY_MEAL_TYPES)[number],
@@ -219,64 +222,16 @@ export default async function TodayPage() {
     .slice(0, 7)
     .reverse()
     .map((entry) => ({
-      day: format(parseISO(entry.local_date), "EEE"),
+      day: formatLocalDate(entry.local_date, "weekday-short"),
       weight: entry.weight_kg,
     }));
-  const todayRows = (checkinResult.data ?? []) as Array<{
-    id: string;
-    meal_type: MealSlot;
-    skip_reason: string | null;
-    status: MealCheckinStatus;
-  }>;
-  const todayMealIds = todayRows.map((meal) => meal.id);
-  const mealItemsResult = todayMealIds.length
-    ? await supabase
-        .from("daily_meal_items")
-        .select(
-          "id,meal_checkin_id,food:foods(id,english_name,verification_status)",
-        )
-        .eq("user_id", user.id)
-        .in("meal_checkin_id", todayMealIds)
-        .order("sort_order")
-    : { data: [], error: null };
-  if (mealItemsResult.error) return todayLoadError();
-  const mealItemRows = mealItemsResult.data;
-  const initialCheckins: TodayMealCheckin[] = normalizeMealSlotCheckins(
-    todayRows.map((row) => ({
-      mealType: row.meal_type,
-      status: row.status,
-      skipReason: row.skip_reason,
-    })),
-  ).map((checkin) => {
-    const storedMeal = todayRows.find(
-      (row) => row.meal_type === checkin.mealType,
-    );
-    const items: TodayMealItem[] = storedMeal
-      ? (mealItemRows ?? [])
-          .filter((item) => item.meal_checkin_id === storedMeal.id)
-          .flatMap((item) =>
-            item.food
-              ? [
-                  {
-                    id: item.id,
-                    foodId: item.food.id,
-                    name: item.food.english_name,
-                    verificationStatus: item.food.verification_status,
-                  },
-                ]
-              : [],
-          )
-      : [];
-    return { ...checkin, items };
-  });
-
   return (
     <TodayDashboard
       demoMode={false}
       name={(profile?.full_name ?? "Member").split(/\s+/)[0]}
       timeZone={timeZone}
       renderedLocalDay={today}
-      initialCheckins={initialCheckins}
+      initialCheckins={checkinResult.data}
       mealDetails={mealDetails}
       weightPoints={weightPoints}
       providerLabel={
@@ -309,7 +264,7 @@ export default async function TodayPage() {
         goal
           ? {
               type: goal.goal_type,
-              targetDate: format(parseISO(goal.target_date), "MMM d"),
+              targetDate: formatLocalDate(goal.target_date, "month-day"),
               currentKg: latestWeight,
               targetKg: goal.target_weight_kg,
               startKg: baseline,

@@ -13,19 +13,10 @@ import {
   EXTERNAL_FOOD_PARSER_VERSION,
   fetchProviderJson,
   payloadSha256,
+  record,
+  text,
+  type UnknownRecord,
 } from "./provider-utils";
-
-type UnknownRecord = Record<string, unknown>;
-
-function record(value: unknown): UnknownRecord {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as UnknownRecord)
-    : {};
-}
-
-function text(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
 
 function nutrientRows(food: UnknownRecord) {
   const rows = Array.isArray(food.foodNutrients) ? food.foodNutrients : [];

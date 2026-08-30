@@ -2,10 +2,11 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { Json } from "@/src/types/database";
 import {
-  calculateNutritionEstimate,
-  evaluateSafetyContext,
+  assessGoalDirectionConsistency,
+  assessGoalAwareNutrition,
   filterEligibleFoods,
   localDateInTimeZone,
+  normalizeGoalType,
   resolveProfileAge,
   validateAiPlanDomain,
   validatePlanNutritionRanges,
@@ -240,7 +241,7 @@ export async function POST(request: Request) {
         .single(),
       supabase
         .from("goals")
-        .select("id,goal_type,target_date,target_weight_kg")
+        .select("id,goal_type,plan_start_date,target_date,target_weight_kg")
         .eq("user_id", user.id)
         .eq("status", "active")
         .order("created_at", { ascending: false })
@@ -279,6 +280,20 @@ export async function POST(request: Request) {
     // NULL here, so fail with a repair path before doing any calculations.
     if (profile.height_cm === null) {
       throw new Error("profile_height_required");
+    }
+
+    const startWeight =
+      weights.find((entry) => entry.is_onboarding_baseline) ?? weights[0]!;
+    const latestWeight = weights[weights.length - 1]!;
+    const goalType = normalizeGoalType(goal.goal_type);
+    if (!goalType) throw new Error("trusted_profile_incomplete");
+    const goalDirection = assessGoalDirectionConsistency({
+      startingWeightKg: startWeight.weight_kg,
+      targetWeightKg: goal.target_weight_kg,
+      goalType,
+    });
+    if (!goalDirection.consistent) {
+      throw new Error("goal_direction_conflict");
     }
 
     const foodIds = [...new Set((preferencesResult.data ?? []).map((item) => item.food_id))];
@@ -386,36 +401,24 @@ export async function POST(request: Request) {
     });
     if (allowedFoods.length < 3) throw new Error("insufficient_eligible_foods");
 
-    const startWeight = weights.find((entry) => entry.is_onboarding_baseline) ?? weights[0]!;
-    const latestWeight = weights[weights.length - 1]!;
     const profileAge = resolveProfileAge(
       profile.date_of_birth,
       profile.age,
       localDateInTimeZone(new Date(), profile.time_zone),
     );
     if (profileAge === null) throw new Error("trusted_profile_incomplete");
-    const safety = evaluateSafetyContext({
-      ageYears: profileAge,
-      relevantMedicalConcerns: Boolean(profile.safety_context),
-    });
-    const activityMap = {
-      sedentary: "sedentary",
-      lightly_active: "light",
-      moderately_active: "moderate",
-      very_active: "very_active",
-      extremely_active: "very_active",
-    } as const;
-    const estimate = calculateNutritionEstimate({
-      weightKg: latestWeight.weight_kg,
+    const { safety, estimate } = assessGoalAwareNutrition({
+      currentWeightKg: latestWeight.weight_kg,
+      startingWeightKg: startWeight.weight_kg,
+      targetWeightKg: goal.target_weight_kg,
+      planStartDate: goal.plan_start_date,
+      targetDate: goal.target_date,
+      goalType,
       heightCm: profile.height_cm,
       ageYears: profileAge,
-      sexForEstimate:
-        profile.gender === "male" || profile.gender === "female"
-          ? profile.gender
-          : "unspecified",
-      activityLevel: profile.activity_level ? activityMap[profile.activity_level] : null,
-      goalType: goal.goal_type,
-      relevantMedicalConcerns: safety.requiresNonRestrictivePlan,
+      gender: profile.gender,
+      profileActivityLevel: profile.activity_level,
+      relevantMedicalConcerns: Boolean(profile.safety_context),
     });
 
     const input: PlanProviderInput = {
@@ -427,7 +430,7 @@ export async function POST(request: Request) {
         currentWeightKg: latestWeight.weight_kg,
         startWeightKg: startWeight.weight_kg,
         targetWeightKg: goal.target_weight_kg,
-        goalType: goal.goal_type,
+        goalType,
         targetDate: goal.target_date,
         activityLevel: profile.activity_level ?? "unspecified",
         trainingDaysPerWeek: profile.training_days_per_week ?? 0,
@@ -536,6 +539,7 @@ export async function POST(request: Request) {
       error instanceof Error &&
       [
         "trusted_profile_incomplete",
+        "goal_direction_conflict",
         "profile_height_required",
         "profile_data_load_failed",
         "insufficient_eligible_foods",

@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import type { FormEvent } from "react";
 import { useEffect, useState } from "react";
 import Link from "next/link";
@@ -14,23 +15,38 @@ import {
 import { AppReleaseCard } from "@/components/app-release-card";
 import { ApiErrorNotice } from "@/components/api-error-notice";
 import { AppearanceControl } from "@/components/appearance-control";
-import { FoodLabelUpload } from "@/components/food-label-upload";
 import { MealPreferenceEditor } from "@/components/meal-preference-editor";
 import {
   apiErrorFromPayload,
   clientApiError,
 } from "@/src/lib/client-api-error";
 import type { ApiError } from "@/src/lib/api-response";
+import {
+  GOAL_TYPE_LABELS,
+  type GoalType,
+} from "@/src/lib/domain/goals";
 import type { PrimaryMealType } from "@/src/lib/domain/meal-slots";
 
-export type SettingsGoalType =
-  | "fat_loss"
-  | "muscle_gain"
-  | "maintenance"
-  | "body_recomposition";
+const FoodLabelUpload = dynamic(
+  () =>
+    import("@/components/food-label-upload").then(
+      (module) => module.FoodLabelUpload,
+    ),
+  {
+    loading: () => (
+      <div className="message-box" role="status">
+        Loading the private label reader…
+      </div>
+    ),
+  },
+);
 
 export type SettingsInitialData = {
   mode: "authenticated" | "demo";
+  release: {
+    channelLabel: string;
+    displayVersion: string;
+  };
   account: {
     email: string;
     createdAt: string | null;
@@ -47,7 +63,7 @@ export type SettingsInitialData = {
   };
   goal: {
     id: string;
-    goalType: SettingsGoalType;
+    goalType: GoalType;
     targetWeightKg: number;
     targetDate: string;
   } | null;
@@ -67,7 +83,13 @@ export type SettingsInitialData = {
     createdAt: string;
   }>;
   aiProviderMode: "mock" | "openai" | "unavailable";
-  loadError: string | null;
+  loadErrors: {
+    profile: string | null;
+    goal: string | null;
+    mealPreferences: string | null;
+    privateLabelFoods: string | null;
+    activeLabelDrafts: string | null;
+  };
 };
 
 type PrivateLabelFood = {
@@ -124,13 +146,6 @@ const sections = [
   ["about", "About"],
 ];
 
-const goalLabels: Record<SettingsGoalType, string> = {
-  fat_loss: "Fat loss",
-  muscle_gain: "Muscle gain",
-  maintenance: "Maintenance",
-  body_recomposition: "Body recomposition",
-};
-
 function splitList(value: string) {
   const seen = new Set<string>();
   return value
@@ -152,6 +167,22 @@ function formatLabelDraftDate(value: string) {
     dateStyle: "medium",
     timeZone: "UTC",
   }).format(date);
+}
+
+function SectionLoadError({ message }: { message: string }) {
+  return (
+    <div
+      className="message-box error"
+      role="alert"
+      style={{ marginBottom: "1rem" }}
+    >
+      <ShieldAlert aria-hidden="true" size={18} />
+      <span>{message}</span>
+      <Link className="button button-quiet button-small" href="/settings">
+        Reload Settings
+      </Link>
+    </div>
+  );
 }
 
 async function updateSettings(body: unknown) {
@@ -201,7 +232,7 @@ export function SettingsView({
     initialData.profile.preferredWeightUnit,
   );
   const [timeZone, setTimeZone] = useState(initialData.profile.timeZone);
-  const [goalType, setGoalType] = useState<SettingsGoalType | "">(
+  const [goalType, setGoalType] = useState<GoalType | "">(
     initialData.goal?.goalType ?? "",
   );
   const [allergies, setAllergies] = useState(
@@ -241,7 +272,6 @@ export function SettingsView({
     Array<{ foodId: string; foodName: string }>
   >([]);
   const isDemo = initialData.mode === "demo";
-  const savingBlocked = Boolean(initialData.loadError);
 
   useEffect(() => {
     if (window.location.hash !== "#preferences") return;
@@ -268,7 +298,7 @@ export function SettingsView({
 
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (savingBlocked) return;
+    if (initialData.loadErrors.profile) return;
     setPending("profile");
     setStatus(null);
     try {
@@ -305,7 +335,7 @@ export function SettingsView({
 
   async function saveGoal(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!goalType || savingBlocked) return;
+    if (!goalType || initialData.loadErrors.goal) return;
     setPending("goal");
     setStatus(null);
     try {
@@ -336,7 +366,7 @@ export function SettingsView({
 
   async function savePreferences(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (savingBlocked) return;
+    if (initialData.loadErrors.profile) return;
     setPending("preferences");
     setStatus(null);
     const allergyItems = noAllergies ? [] : splitList(allergies);
@@ -595,16 +625,6 @@ export function SettingsView({
           </span>
         </div>
       ) : null}
-      {initialData.loadError ? (
-        <div
-          className="message-box error"
-          role="alert"
-          style={{ marginBottom: "1rem" }}
-        >
-          <ShieldAlert size={18} />
-          <span>{initialData.loadError}</span>
-        </div>
-      ) : null}
       {status ? (
         <div
           className={`message-box${status.kind === "error" ? " error" : ""}`}
@@ -654,6 +674,9 @@ export function SettingsView({
                 </p>
               </div>
             </div>
+            {initialData.loadErrors.profile ? (
+              <SectionLoadError message={initialData.loadErrors.profile} />
+            ) : (
             <form onSubmit={saveProfile}>
               <div className="field-grid">
                 <label className="field">
@@ -726,14 +749,18 @@ export function SettingsView({
               <div className="section-actions">
                 <button
                   className="button button-dark"
-                  disabled={savingBlocked || pending !== null}
+                  disabled={pending !== null}
                   type="submit"
                 >
                   {pending === "profile" ? "Saving…" : "Save profile"}
                 </button>
               </div>
             </form>
+            )}
 
+            {initialData.loadErrors.goal ? (
+              <SectionLoadError message={initialData.loadErrors.goal} />
+            ) : (
             <form
               onSubmit={saveGoal}
               style={{
@@ -748,14 +775,14 @@ export function SettingsView({
                   <select
                     disabled={!initialData.goal || pending !== null}
                     onChange={(event) =>
-                      setGoalType(event.target.value as SettingsGoalType)
+                      setGoalType(event.target.value as GoalType)
                     }
                     value={goalType}
                   >
                     {!initialData.goal ? (
                       <option value="">No active goal</option>
                     ) : null}
-                    {Object.entries(goalLabels).map(([value, label]) => (
+                    {Object.entries(GOAL_TYPE_LABELS).map(([value, label]) => (
                       <option key={value} value={value}>
                         {label}
                       </option>
@@ -786,15 +813,14 @@ export function SettingsView({
               <div className="section-actions">
                 <button
                   className="button button-dark"
-                  disabled={
-                    savingBlocked || !initialData.goal || pending !== null
-                  }
+                  disabled={!initialData.goal || pending !== null}
                   type="submit"
                 >
                   {pending === "goal" ? "Saving…" : "Save goal type"}
                 </button>
               </div>
             </form>
+            )}
           </section>
 
           <section
@@ -812,12 +838,20 @@ export function SettingsView({
               </div>
             </div>
 
-            <MealPreferenceEditor
-              catalogAdditions={labelCatalogAdditions}
-              disabled={savingBlocked}
-              initialPreferences={initialData.mealPreferences}
-            />
+            {initialData.loadErrors.mealPreferences ? (
+              <SectionLoadError
+                message={initialData.loadErrors.mealPreferences}
+              />
+            ) : (
+              <MealPreferenceEditor
+                catalogAdditions={labelCatalogAdditions}
+                initialPreferences={initialData.mealPreferences}
+              />
+            )}
 
+            {initialData.loadErrors.profile ? (
+              <SectionLoadError message={initialData.loadErrors.profile} />
+            ) : (
             <form onSubmit={savePreferences}>
               <div className="field-grid">
                 <div className="field preference-field">
@@ -973,7 +1007,7 @@ export function SettingsView({
               <div className="section-actions">
                 <button
                   className="button button-dark"
-                  disabled={savingBlocked || pending !== null}
+                  disabled={pending !== null}
                   type="submit"
                 >
                   {pending === "preferences"
@@ -982,6 +1016,7 @@ export function SettingsView({
                 </button>
               </div>
             </form>
+            )}
           </section>
 
           <section className="card settings-section" id="foods">
@@ -998,7 +1033,11 @@ export function SettingsView({
               </div>
             </div>
 
-            {activeLabelDrafts.length ? (
+            {initialData.loadErrors.activeLabelDrafts ? (
+              <SectionLoadError
+                message={initialData.loadErrors.activeLabelDrafts}
+              />
+            ) : activeLabelDrafts.length ? (
               <div className="label-draft-panel">
                 <div>
                   <strong>Unfinished private label drafts</strong>
@@ -1093,7 +1132,11 @@ export function SettingsView({
               </div>
             )}
 
-            {privateLabelFoods.length ? (
+            {initialData.loadErrors.privateLabelFoods ? (
+              <SectionLoadError
+                message={initialData.loadErrors.privateLabelFoods}
+              />
+            ) : privateLabelFoods.length ? (
               <div className="message-box" style={{ marginBottom: "1rem" }}>
                 <div>
                   <strong>
@@ -1202,7 +1245,7 @@ export function SettingsView({
             </div>
           </section>
 
-          <AppReleaseCard />
+          <AppReleaseCard {...initialData.release} />
 
           <section className="card settings-section danger-zone">
             <div className="card-title">

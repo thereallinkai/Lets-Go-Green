@@ -1,8 +1,13 @@
 import { FlaskConical } from "lucide-react";
-import { APP_RELEASE } from "@/src/lib/app-release";
 import { BRAND } from "@/src/lib/brand";
 
-export function AppReleaseCard() {
+export function AppReleaseCard({
+  channelLabel,
+  displayVersion,
+}: {
+  channelLabel: string;
+  displayVersion: string;
+}) {
   return (
     <section
       aria-labelledby="app-release-title"
@@ -18,9 +23,9 @@ export function AppReleaseCard() {
       </div>
 
       <div className="release-overview">
-        <span className="release-channel">{APP_RELEASE.channelLabel}</span>
+        <span className="release-channel">{channelLabel}</span>
         <div>
-          <strong>{APP_RELEASE.displayVersion}</strong>
+          <strong>{displayVersion}</strong>
           <p>
             This is a testing release. Features and stored-data formats may
             change before the stable release.

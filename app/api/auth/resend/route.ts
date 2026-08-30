@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { apiError, apiSuccess, publicError } from "@/src/lib/api-response";
-import { classifyAuthError } from "@/src/lib/auth-error-taxonomy";
+import {
+  classifyAuthError,
+  isIdentityConcealingAuthError,
+} from "@/src/lib/auth-error-taxonomy";
 import { isDevelopmentDemo } from "@/src/lib/env";
 import { createSupabaseServerClient } from "@/src/lib/supabase/server";
 
@@ -23,12 +26,7 @@ export async function POST(request: Request) {
       type: "signup",
     });
     if (error) {
-      const code = typeof error.code === "string" ? error.code : "";
-      if (
-        code === "user_not_found" ||
-        code === "invalid_credentials" ||
-        code === "email_address_invalid"
-      ) {
+      if (isIdentityConcealingAuthError(error)) {
         return apiSuccess({ sent: true });
       }
       return publicError(classifyAuthError(error, "resend_verification"));

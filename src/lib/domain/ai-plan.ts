@@ -17,7 +17,7 @@ export const AI_PLAN_SCHEMA_VERSION = "1.0" as const;
 const mealTypeSchema = z.enum(PRIMARY_MEAL_TYPES);
 const measurementBasisSchema = z.enum(MEASUREMENT_BASES);
 
-export const aiPlanItemSchema = z
+const aiPlanItemSchema = z
   .object({
     foodId: z.string().trim().min(1).max(128),
     quantity: z.number().positive().max(10_000),
@@ -28,7 +28,7 @@ export const aiPlanItemSchema = z
   })
   .strict();
 
-export const aiPlanMealSchema = z
+const aiPlanMealSchema = z
   .object({
     mealType: mealTypeSchema,
     items: z.array(aiPlanItemSchema).min(1).max(20),
@@ -50,7 +50,7 @@ export const aiPlanMealSchema = z
     });
   });
 
-export const aiPlanDaySchema = z
+const aiPlanDaySchema = z
   .object({
     dayIndex: z.number().int().min(1).max(7),
     title: z.string().trim().min(1).max(100).optional(),
@@ -96,7 +96,6 @@ export const aiPlanSchema = z
   });
 
 export type AiPlan = z.infer<typeof aiPlanSchema>;
-export type AiPlanItem = z.infer<typeof aiPlanItemSchema>;
 
 export interface AllowedPlanFood {
   id: string;
@@ -109,7 +108,7 @@ export interface AllowedPlanFood {
   verificationStatus: NutritionVerificationStatus;
 }
 
-export interface AiPlanValidationIssue {
+interface AiPlanValidationIssue {
   code:
     | "schema"
     | "unknown_food"

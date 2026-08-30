@@ -1,0 +1,192 @@
+#!/bin/zsh
+set -Eeuo pipefail
+
+readonly SCRIPT_DIR="${0:A:h}"
+readonly PROJECT_DIR="${SCRIPT_DIR:h}"
+readonly NATIVE_PROJECT_ID="$(
+  printf '%s' "$PROJECT_DIR" \
+    | /usr/bin/shasum -a 256 \
+    | /usr/bin/awk '{print $1}'
+)"
+readonly APP_PORT="${PORT:-3000}"
+readonly APP_ORIGIN="http://127.0.0.1:${APP_PORT}"
+readonly HEALTH_URL="${APP_ORIGIN}/api/health"
+readonly LOCK_FILE="${PROJECT_DIR}/work/native-launcher.lock"
+readonly LOCKED_ARGUMENT="--with-launch-lock"
+
+APP_PID=""
+
+fail() {
+  printf '\nCould not start Let\x27s Go Green!: %s\n' "$*" >&2
+  if [[ -t 0 ]]; then
+    printf 'This window will stay open so you can read the message.\n' >&2
+    read -r "?Press Return to close. " || true
+  fi
+  exit 1
+}
+
+cleanup() {
+  if [[ -n "$APP_PID" ]] && kill -0 "$APP_PID" >/dev/null 2>&1; then
+    kill -TERM "$APP_PID" >/dev/null 2>&1 || true
+    wait "$APP_PID" 2>/dev/null || true
+  fi
+  APP_PID=""
+}
+
+stop_from_signal() {
+  trap - INT TERM HUP
+  cleanup
+  exit 130
+}
+
+health_value() {
+  local payload="$1"
+  local key="$2"
+  printf '%s' "$payload" \
+    | /usr/bin/plutil -extract "data.${key}" raw -o - - 2>/dev/null \
+    || true
+}
+
+health_matches_native_demo() {
+  local payload
+  payload="$(
+    /usr/bin/curl --connect-timeout 1 --max-time 3 --silent --fail \
+      "$HEALTH_URL" 2>/dev/null || true
+  )"
+  [[ -n "$payload" ]] || return 1
+
+  [[ "$(health_value "$payload" readiness)" == "ready" \
+    && "$(health_value "$payload" database)" == "not_configured" \
+    && "$(health_value "$payload" aiProvider)" == "mock" \
+    && "$(health_value "$payload" nativeProjectId)" == "$NATIVE_PROJECT_ID" ]]
+}
+
+open_browser() {
+  if [[ "${LETS_GO_GREEN_SKIP_BROWSER_OPEN:-false}" == "true" ]]; then
+    printf 'Browser opening skipped for launcher verification.\n'
+    return
+  fi
+  /usr/bin/open "$APP_ORIGIN"
+}
+
+wait_for_concurrent_start() {
+  printf 'Another click is already preparing Let\x27s Go Green! Waiting for it…\n'
+  for _attempt in {1..240}; do
+    if health_matches_native_demo; then
+      printf 'Let\x27s Go Green! is ready at %s.\n' "$APP_ORIGIN"
+      open_browser
+      return 0
+    fi
+    if /usr/bin/lockf -t 0 "$LOCK_FILE" /usr/bin/true >/dev/null 2>&1; then
+      fail "The other local start exited before the website became ready. Click the launcher to retry."
+    fi
+    sleep 0.5
+  done
+  fail "The local website did not become ready within two minutes."
+}
+
+if health_matches_native_demo; then
+  printf 'Let\x27s Go Green! is already ready at %s.\n' "$APP_ORIGIN"
+  open_browser
+  exit 0
+fi
+
+mkdir -p "${LOCK_FILE:h}"
+
+if [[ "${1:-}" != "$LOCKED_ARGUMENT" ]]; then
+  if /usr/bin/lockf -t 0 "$LOCK_FILE" "$0" "$LOCKED_ARGUMENT"; then
+    exit 0
+  else
+    readonly LOCK_STATUS=$?
+  fi
+  if [[ "$LOCK_STATUS" == "75" ]]; then
+    wait_for_concurrent_start
+    exit 0
+  fi
+  exit "$LOCK_STATUS"
+fi
+
+if health_matches_native_demo; then
+  printf 'Let\x27s Go Green! is already ready at %s.\n' "$APP_ORIGIN"
+  open_browser
+  exit 0
+fi
+
+if /usr/bin/nc -z 127.0.0.1 "$APP_PORT" >/dev/null 2>&1; then
+  fail "Port ${APP_PORT} is being used by another process. Stop it and click this launcher again."
+fi
+
+readonly NVM_HOME="${NVM_DIR:-${HOME}/.nvm}"
+readonly NVM_SCRIPT="${NVM_HOME}/nvm.sh"
+
+[[ -d "$PROJECT_DIR/.git" ]] \
+  || fail "The project folder could not be found from this launcher."
+[[ -s "$NVM_SCRIPT" ]] \
+  || fail "nvm is missing at ${NVM_SCRIPT}."
+
+cd "$PROJECT_DIR"
+
+# Finder and Dock launches do not inherit an interactive shell.
+export NVM_DIR="$NVM_HOME"
+source "$NVM_SCRIPT"
+
+EXPECTED_NODE="$(tr -d '[:space:]' < .nvmrc)"
+[[ -n "$EXPECTED_NODE" ]] || fail "The project Node.js version is missing."
+if [[ "$(nvm version "$EXPECTED_NODE")" != "v${EXPECTED_NODE}" ]]; then
+  printf 'Installing the project Node.js version once…\n'
+  nvm install "$EXPECTED_NODE" \
+    || fail "Node.js ${EXPECTED_NODE} could not be installed."
+fi
+nvm use --silent "$EXPECTED_NODE" \
+  || fail "Node.js ${EXPECTED_NODE} could not be selected."
+
+EXPECTED_NPM="$(
+  node -p '
+    const value = require("./package.json").packageManager;
+    const match = typeof value === "string" ? /^npm@(\d+\.\d+\.\d+)$/.exec(value) : null;
+    match?.[1] ?? "";
+  '
+)"
+[[ -n "$EXPECTED_NPM" ]] || fail "The project npm version is missing."
+if [[ "$(npm --version)" != "$EXPECTED_NPM" ]]; then
+  printf 'Installing npm %s once…\n' "$EXPECTED_NPM"
+  npm install --global "npm@${EXPECTED_NPM}" \
+    || fail "npm ${EXPECTED_NPM} could not be installed."
+fi
+
+trap cleanup EXIT
+trap stop_from_signal INT TERM HUP
+
+printf 'Preparing the safe local testing website…\n'
+printf 'The browser will open automatically when it is ready.\n'
+printf 'Keep this window open; press Control-C here to stop the website.\n\n'
+
+./scripts/dev-native &
+APP_PID=$!
+
+for _attempt in {1..240}; do
+  if health_matches_native_demo; then
+    printf '\nReady: %s\n' "$APP_ORIGIN"
+    open_browser
+    if wait "$APP_PID"; then
+      APP_STATUS=0
+    else
+      APP_STATUS=$?
+    fi
+    APP_PID=""
+    exit "$APP_STATUS"
+  fi
+
+  if ! kill -0 "$APP_PID" >/dev/null 2>&1; then
+    if wait "$APP_PID"; then
+      APP_STATUS=0
+    else
+      APP_STATUS=$?
+    fi
+    APP_PID=""
+    fail "The local server exited before becoming ready (status ${APP_STATUS})."
+  fi
+  sleep 0.5
+done
+
+fail "The local website did not become ready within two minutes."

@@ -1,6 +1,10 @@
 import { z } from "zod";
 import type { Database, Json } from "@/src/types/database";
-import { localDateInTimeZone } from "@/src/lib/domain";
+import {
+  assessGoalDirectionConsistency,
+  localDateInTimeZone,
+  normalizeGoalType,
+} from "@/src/lib/domain";
 import { PRIMARY_MEAL_TYPES } from "@/src/lib/domain/meal-slots";
 import { apiError, apiSuccess, publicError } from "@/src/lib/api-response";
 import { isAuthSessionMissing } from "@/src/lib/auth-error-taxonomy";
@@ -334,6 +338,36 @@ export async function PUT(request: Request) {
       },
     );
   }
+  const selectedGoalType = normalizeGoalType(parsed.data.goalType);
+  if (!selectedGoalType) {
+    return apiError(
+      "INVALID_GOAL_TYPE",
+      "Choose a supported wellness goal before completing onboarding.",
+      422,
+    );
+  }
+  const goalDirection = assessGoalDirectionConsistency({
+    startingWeightKg: currentWeight.weightKg,
+    targetWeightKg: targetWeight.weightKg,
+    goalType: selectedGoalType,
+  });
+  if (!goalDirection.consistent) {
+    return apiError(
+      "GOAL_DIRECTION_CONFLICT",
+      "The selected goal type does not match the target-weight direction.",
+      422,
+      {
+        details:
+          "Review the goal type or target weight. Fat loss uses a lower target, muscle gain uses a higher target, and maintenance keeps the target equal to the starting weight.",
+        retryable: false,
+        action: {
+          kind: "navigate",
+          label: "Review goal and target",
+          href: "/onboarding?step=4",
+        },
+      },
+    );
+  }
   if (isDevelopmentDemo()) return apiSuccess({ completed: true, goalId: "demo-goal" });
 
   try {
@@ -367,12 +401,6 @@ export async function PUT(request: Request) {
       light: "lightly_active",
       moderate: "moderately_active",
       high: "very_active",
-    } as const;
-    const goalMap = {
-      fat_loss: "fat_loss",
-      muscle_gain: "muscle_gain",
-      maintenance: "maintenance",
-      recomposition: "body_recomposition",
     } as const;
     const trainingValue = Number(parsed.data.trainingDays);
     let planStartDate: string;
@@ -433,7 +461,7 @@ export async function PUT(request: Request) {
       profile_disliked_foods: [],
       profile_safety_context: parsed.data.safety.join("; ") || null,
       profile_notes: parsed.data.notes || null,
-      selected_goal_type: goalMap[parsed.data.goalType],
+      selected_goal_type: selectedGoalType,
       current_weight_kg: currentWeight.weightKg,
       target_weight_kg: targetWeight.weightKg,
       plan_start_date: planStartDate,

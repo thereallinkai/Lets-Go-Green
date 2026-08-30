@@ -457,12 +457,9 @@ describe("TodayDashboard meal completion", () => {
         json: async () => ({
           data: {
             id: "item-1",
-            food: {
-              id: "food-1",
-              english_name:
-                "Optimum Nutrition — Gold Standard 100% Whey",
-              verification_status: "source_reported",
-            },
+            localDate: "2026-08-14",
+            mealType: "morning_snack",
+            foodId: "food-1",
           },
         }),
       };
@@ -562,14 +559,7 @@ describe("TodayDashboard meal completion", () => {
       return {
         ok: true,
         json: async () => ({
-          data: {
-            id: "breakfast-item-1",
-            food: {
-              id: "food-apple",
-              english_name: "Apple",
-              verification_status: "verified",
-            },
-          },
+          data: { id: "breakfast-item-1" },
         }),
       };
     });
@@ -633,7 +623,7 @@ describe("TodayDashboard meal completion", () => {
     ]);
   });
 
-  it("reconciles a malformed successful food-add response before claiming success", async () => {
+  it("uses the authoritative day when a successful add omits item details", async () => {
     const catalogResponse = {
       ok: true,
       json: async () => ({
@@ -697,74 +687,6 @@ describe("TodayDashboard meal completion", () => {
       "POST",
       "GET",
     ]);
-  });
-
-  it("uses the authoritative food name when post-insert detail lookup is unavailable", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          data: [
-            {
-              id: "food-apple",
-              english_name: "Apple",
-              verification_status: "verified",
-              plan_eligible: true,
-            },
-          ],
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 201,
-        json: async () => ({
-          data: {
-            id: "breakfast-item-apple",
-            foodId: "food-apple",
-            food: null,
-            reconciliationRequired: true,
-          },
-        }),
-      })
-      .mockResolvedValueOnce(
-        dayResponse({
-          breakfast: {
-            status: "completed",
-            items: [
-              {
-                id: "breakfast-item-apple",
-                foodId: "food-apple",
-                name: "Apple",
-                verificationStatus: "verified",
-              },
-            ],
-          },
-        }),
-      );
-    vi.stubGlobal("fetch", fetchMock);
-    const user = userEvent.setup();
-    render(
-      <TodayDashboard
-        demoMode={false}
-        initialCompleted={{ breakfast: false, lunch: false, dinner: false }}
-      />,
-    );
-
-    await user.click(
-      within(mealRow("Breakfast")).getByRole("button", {
-        name: "Record food for Breakfast",
-      }),
-    );
-    await user.click(
-      await within(mealRow("Breakfast")).findByRole("button", {
-        name: "Add Apple to Breakfast",
-      }),
-    );
-
-    await waitFor(() => expect(mealRow("Breakfast")).toHaveTextContent("Apple"));
-    expect(mealRow("Breakfast")).not.toHaveTextContent("Selected food");
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("converges after a food-add response is lost", async () => {

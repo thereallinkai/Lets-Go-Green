@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import {
   useCallback,
   useEffect,
@@ -8,7 +9,6 @@ import {
   useState,
 } from "react";
 import { ApiErrorNotice } from "@/components/api-error-notice";
-import { FoodLabelUpload } from "@/components/food-label-upload";
 import { NutritionFactsCard } from "@/components/nutrition-facts-card";
 import styles from "@/components/food-discovery.module.css";
 import type { ApiError } from "@/src/lib/api-response";
@@ -97,6 +97,20 @@ type RankedResult =
 type RetryRequest =
   | { kind: "search"; query: string }
   | { kind: "catalog"; query: string };
+
+const FoodLabelUpload = dynamic(
+  () =>
+    import("@/components/food-label-upload").then(
+      (module) => module.FoodLabelUpload,
+    ),
+  {
+    loading: () => (
+      <div className="message-box" role="status">
+        Loading private label tools…
+      </div>
+    ),
+  },
+);
 
 const CATALOG_DELAY_MS = 300;
 const INITIAL_RESULT_COUNT = 6;
@@ -270,6 +284,7 @@ export function FoodSearchPicker({
   const [providerCooldowns, setProviderCooldowns] = useState<
     Partial<Record<ExternalFoodCandidate["provider"], ProviderCooldown>>
   >({});
+  const [labelUploadRequested, setLabelUploadRequested] = useState(false);
   const [visibleResultCount, setVisibleResultCount] = useState(
     INITIAL_RESULT_COUNT,
   );
@@ -1231,29 +1246,40 @@ export function FoodSearchPicker({
         </div>
       </section>
 
-      {showLabelUploadFallback ? <details className={styles.labelFallback}>
-        <summary>
-          <strong>Product not found? Add package-label photos</strong>
-          <span>Read the label privately, then review and confirm every fact.</span>
-        </summary>
-        <div className={styles.labelFallbackBody}>
-          <p>
-            Start with a clear package photo. A private on-device reader suggests
-            only clearly labeled, high-confidence printed facts; compare every
-            suggestion, correct any mismatch, and complete unreadable blanks
-            yourself. The photo stays on this device during recognition. After
-            your explicit confirmation, the original upload is not retained as-is;
-            server-re-encoded evidence stays private and is never shared. Reusable
-            nutrition facts remain review-gated.
-          </p>
-          <FoodLabelUpload
-            onCreated={async (_foodId, displayName) => {
-              changeSearch(displayName);
-              return await catalogCallbackRef.current(displayName);
-            }}
-          />
-        </div>
-      </details> : null}
+      {showLabelUploadFallback ? (
+        <details
+          className={styles.labelFallback}
+          onToggle={(event) => {
+            if (event.currentTarget.open) setLabelUploadRequested(true);
+          }}
+        >
+          <summary>
+            <strong>Product not found? Add package-label photos</strong>
+            <span>
+              Read the label privately, then review and confirm every fact.
+            </span>
+          </summary>
+          <div className={styles.labelFallbackBody}>
+            <p>
+              Start with a clear package photo. A private on-device reader
+              suggests only clearly labeled, high-confidence printed facts;
+              compare every suggestion, correct any mismatch, and complete
+              unreadable blanks yourself. The photo stays on this device during
+              recognition. After your explicit confirmation, the original upload
+              is not retained as-is; server-re-encoded evidence stays private and
+              is never shared. Reusable nutrition facts remain review-gated.
+            </p>
+            {labelUploadRequested ? (
+              <FoodLabelUpload
+                onCreated={async (_foodId, displayName) => {
+                  changeSearch(displayName);
+                  return await catalogCallbackRef.current(displayName);
+                }}
+              />
+            ) : null}
+          </div>
+        </details>
+      ) : null}
     </section>
   );
 }

@@ -436,10 +436,3 @@ export async function recognizeFoodLabelInBrowser(
     void workerCreationPromise?.catch(() => undefined);
   }
 }
-
-export const foodLabelOcrAssetPaths = {
-  manifest: `${OCR_ASSET_ROOT}/manifest.json`,
-  worker: `${OCR_ASSET_ROOT}/worker.min.js`,
-  core: `${OCR_ASSET_ROOT}/core`,
-  language: `${OCR_ASSET_ROOT}/lang`,
-} as const;

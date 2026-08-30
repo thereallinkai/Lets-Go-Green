@@ -1,6 +1,7 @@
 import type { PublicErrorDefinition } from "./api-response";
 
 export type PlanGenerationFailureCode =
+  | "GOAL_DIRECTION_CONFLICT"
   | "PROFILE_HEIGHT_REQUIRED"
   | "PROFILE_DATA_LOAD_FAILED"
   | "TRUSTED_PROFILE_INCOMPLETE"
@@ -14,6 +15,21 @@ export function classifyPlanGenerationFailure(
   code: PlanGenerationFailureCode,
 ): PublicErrorDefinition {
   switch (code) {
+    case "GOAL_DIRECTION_CONFLICT":
+      return {
+        code,
+        message:
+          "The saved goal type and target weight point in different directions.",
+        details:
+          "Your accepted plan is unchanged. Review the goal type and target weight, align them, and then generate again.",
+        status: 409,
+        retryable: false,
+        action: {
+          kind: "navigate",
+          label: "Review goal and target",
+          href: "/onboarding?step=4",
+        },
+      };
     case "PROFILE_HEIGHT_REQUIRED":
       return {
         code,

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const FOOD_VERIFICATION_STATUSES = [
+const FOOD_VERIFICATION_STATUSES = [
   "verified",
   "user_label",
   "source_reported",
@@ -11,7 +11,7 @@ export const FOOD_VERIFICATION_STATUSES = [
 export type FoodVerificationStatus =
   (typeof FOOD_VERIFICATION_STATUSES)[number];
 
-export const foodNutrientFactSchema = z
+const foodNutrientFactSchema = z
   .object({
     code: z.string().min(1),
     name: z.string().min(1),
@@ -22,7 +22,7 @@ export const foodNutrientFactSchema = z
   })
   .strict();
 
-export const foodNutritionFactsSchema = z
+const foodNutritionFactsSchema = z
   .object({
     id: z.string().uuid().optional(),
     measurement_basis: z.enum([
@@ -59,7 +59,7 @@ export const foodNutritionFactsSchema = z
 
 export type FoodNutritionFacts = z.infer<typeof foodNutritionFactsSchema>;
 
-export const foodSourceSummarySchema = z
+const foodSourceSummarySchema = z
   .object({
     provider: z.enum([
       "usda_fdc",
@@ -107,54 +107,3 @@ export const foodCatalogItemSchema = z
   .strict();
 
 export type FoodCatalogItem = z.infer<typeof foodCatalogItemSchema>;
-
-export function hasCompleteCoreNutrition(
-  nutrition: FoodNutritionFacts | null | undefined,
-): nutrition is FoodNutritionFacts & {
-  calories: number;
-  protein_g: number;
-  carbohydrate_g: number;
-  fat_g: number;
-} {
-  return Boolean(
-    nutrition &&
-      [
-        nutrition.calories,
-        nutrition.protein_g,
-        nutrition.carbohydrate_g,
-        nutrition.fat_g,
-      ].every((value) => typeof value === "number" && Number.isFinite(value)),
-  );
-}
-
-export function foodDisplayName(food: FoodCatalogItem): string {
-  if (food.food_kind !== "branded_product") return food.english_name;
-  return [
-    food.brand_name,
-    food.product_name,
-    food.variant_name,
-  ]
-    .filter(Boolean)
-    .join(" — ");
-}
-
-export function verificationLabel(status: FoodVerificationStatus): string {
-  switch (status) {
-    case "verified":
-      return "Source reviewed";
-    case "user_label":
-      return "Confirmed from your label";
-    case "source_reported":
-      return "Reported by external source";
-    case "pending_verification":
-      return "Pending verification";
-    case "unavailable":
-      return "Nutrition unavailable";
-  }
-}
-
-export function measurementBasisLabel(
-  basis: FoodNutritionFacts["measurement_basis"],
-): string {
-  return basis.replaceAll("_", " ");
-}

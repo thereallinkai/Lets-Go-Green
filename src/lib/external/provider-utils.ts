@@ -3,6 +3,18 @@ import { ExternalFoodError } from "./food-data-types";
 
 export const EXTERNAL_FOOD_PARSER_VERSION = "food-source-normalizer-v2";
 
+export type UnknownRecord = Record<string, unknown>;
+
+export function record(value: unknown): UnknownRecord {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as UnknownRecord)
+    : {};
+}
+
+export function text(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
 export function payloadSha256(payload: unknown): string {
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
 }

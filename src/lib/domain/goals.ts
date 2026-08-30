@@ -6,7 +6,46 @@ export type GoalType =
   | "maintenance"
   | "body_recomposition";
 
+export const GOAL_TYPE_LABELS: Readonly<Record<GoalType, string>> = {
+  fat_loss: "Fat loss",
+  muscle_gain: "Muscle gain",
+  maintenance: "Maintenance",
+  body_recomposition: "Body recomposition",
+};
+
+/**
+ * Converts persisted goal names and the onboarding-facing recomposition name
+ * to the canonical domain value without relying on a type assertion.
+ */
+export function normalizeGoalType(value: string): GoalType | null {
+  switch (value) {
+    case "fat_loss":
+    case "muscle_gain":
+    case "maintenance":
+    case "body_recomposition":
+      return value;
+    case "recomposition":
+      return "body_recomposition";
+    default:
+      return null;
+  }
+}
+
 export type GoalDirection = "loss" | "gain" | "maintenance";
+
+const CONSISTENT_GOAL_DIRECTIONS: Readonly<
+  Record<GoalType, readonly GoalDirection[]>
+> = {
+  fat_loss: ["loss"],
+  muscle_gain: ["gain"],
+  maintenance: ["maintenance"],
+  body_recomposition: ["loss", "gain", "maintenance"],
+};
+
+export interface GoalDirectionConsistency {
+  direction: GoalDirection;
+  consistent: boolean;
+}
 
 export interface GoalProgress {
   direction: GoalDirection;
@@ -48,10 +87,22 @@ export function goalTypeConflictsWithDirection(
   goalType: GoalType,
   direction: GoalDirection,
 ): boolean {
-  if (goalType === "body_recomposition") return false;
-  if (goalType === "fat_loss") return direction !== "loss";
-  if (goalType === "muscle_gain") return direction !== "gain";
-  return direction !== "maintenance";
+  return !CONSISTENT_GOAL_DIRECTIONS[goalType].includes(direction);
+}
+
+export function assessGoalDirectionConsistency(input: {
+  startingWeightKg: number;
+  targetWeightKg: number;
+  goalType: GoalType;
+}): GoalDirectionConsistency {
+  const direction = getGoalDirection(
+    input.startingWeightKg,
+    input.targetWeightKg,
+  );
+  return {
+    direction,
+    consistent: !goalTypeConflictsWithDirection(input.goalType, direction),
+  };
 }
 
 export function calculateGoalProgress(
@@ -114,7 +165,12 @@ export function assessGoalTimeline(input: {
     startDate,
     targetDate,
   } = input;
-  const direction = getGoalDirection(startingWeightKg, targetWeightKg);
+  const consistency = assessGoalDirectionConsistency({
+    startingWeightKg,
+    targetWeightKg,
+    goalType,
+  });
+  const direction = consistency.direction;
   const availableDays = Math.max(0, daysBetweenLocalDates(startDate, targetDate));
   const desiredChangeKg = targetWeightKg - startingWeightKg;
   const impliedWeeklyChangeKg =
@@ -132,7 +188,7 @@ export function assessGoalTimeline(input: {
 
   return {
     direction,
-    conflictsWithGoalType: goalTypeConflictsWithDirection(goalType, direction),
+    conflictsWithGoalType: !consistency.consistent,
     desiredChangeKg,
     availableDays,
     impliedWeeklyChangeKg,

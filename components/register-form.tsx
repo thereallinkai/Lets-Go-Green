@@ -13,15 +13,25 @@ import {
   calculateAgeOnDate,
   MAXIMUM_REGISTRATION_AGE,
   MINIMUM_REGISTRATION_AGE,
+  registrationDateOfBirthBounds,
+  validateRegistrationDateOfBirth,
+} from "@/src/lib/domain/date-of-birth";
+import {
   isValidIanaTimeZone,
   localDateInTimeZone,
   parseLocalDate,
-  registrationDateOfBirthBounds,
-  validateRegistrationDateOfBirth,
-} from "@/src/lib/domain";
+} from "@/src/lib/domain/dates";
 import { PasswordField } from "./password-field";
 import { ApiErrorNotice } from "./api-error-notice";
 import { useClientReady } from "@/src/lib/client-ready";
+import {
+  LEGACY_REGISTRATION_DRAFT_KEY,
+  REGISTRATION_DRAFT_KEY,
+  getBrowserStorage,
+  readStorageValue,
+  removeStorageValue,
+  writeStorageValue,
+} from "@/src/lib/browser-storage";
 import {
   createRegistrationEmailHandoff,
   REGISTRATION_EMAIL_HANDOFF_KEY,
@@ -39,8 +49,6 @@ type RegistrationField =
 
 type RegistrationErrors = Partial<Record<RegistrationField, string>>;
 
-const REGISTRATION_DRAFT_KEY = "lets-go-green-registration-draft";
-const LEGACY_REGISTRATION_DRAFT_KEY = "cutting-plan-registration-draft";
 const REGISTRATION_DRAFT_VERSION = 2;
 
 type AgeConfirmation = {
@@ -58,38 +66,6 @@ type SafeRegistrationDraft = {
   dateOfBirth: string;
   email: string;
 };
-
-function browserStorage(kind: "localStorage" | "sessionStorage") {
-  try {
-    return window[kind];
-  } catch {
-    return null;
-  }
-}
-
-function readStorage(storage: Storage | null, key: string) {
-  try {
-    return storage?.getItem(key) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function removeStorage(storage: Storage | null, key: string) {
-  try {
-    storage?.removeItem(key);
-  } catch {
-    // Registration still works when browser storage is unavailable.
-  }
-}
-
-function writeStorage(storage: Storage | null, key: string, value: string) {
-  try {
-    storage?.setItem(key, value);
-  } catch {
-    // Registration still works when browser storage is unavailable.
-  }
-}
 
 function safeDraftFromJson(raw: string | null): SafeRegistrationDraft | null {
   if (!raw) return null;
@@ -219,21 +195,21 @@ export function RegisterForm() {
   const dateOfBirthBounds = registrationDateOfBirthBounds(referenceDate);
 
   useEffect(() => {
-    const session = browserStorage("sessionStorage");
-    const local = browserStorage("localStorage");
+    const session = getBrowserStorage("sessionStorage");
+    const local = getBrowserStorage("localStorage");
     const draft =
-      safeDraftFromJson(readStorage(session, REGISTRATION_DRAFT_KEY)) ??
-      safeDraftFromJson(readStorage(local, REGISTRATION_DRAFT_KEY)) ??
-      safeDraftFromJson(readStorage(local, LEGACY_REGISTRATION_DRAFT_KEY));
+      safeDraftFromJson(readStorageValue(session, REGISTRATION_DRAFT_KEY)) ??
+      safeDraftFromJson(readStorageValue(local, REGISTRATION_DRAFT_KEY)) ??
+      safeDraftFromJson(readStorageValue(local, LEGACY_REGISTRATION_DRAFT_KEY));
 
-    removeStorage(local, REGISTRATION_DRAFT_KEY);
-    removeStorage(local, LEGACY_REGISTRATION_DRAFT_KEY);
+    removeStorageValue(local, REGISTRATION_DRAFT_KEY);
+    removeStorageValue(local, LEGACY_REGISTRATION_DRAFT_KEY);
 
     if (!draft) {
-      removeStorage(session, REGISTRATION_DRAFT_KEY);
+      removeStorageValue(session, REGISTRATION_DRAFT_KEY);
       return;
     }
-    writeStorage(session, REGISTRATION_DRAFT_KEY, JSON.stringify(draft));
+    writeStorageValue(session, REGISTRATION_DRAFT_KEY, JSON.stringify(draft));
 
     const formElement = formRef.current;
     if (!formElement) return;
@@ -250,8 +226,8 @@ export function RegisterForm() {
 
   function saveSafeDraft(formElement: HTMLFormElement) {
     const form = new FormData(formElement);
-    writeStorage(
-      browserStorage("sessionStorage"),
+    writeStorageValue(
+      getBrowserStorage("sessionStorage"),
       REGISTRATION_DRAFT_KEY,
       JSON.stringify({
         version: REGISTRATION_DRAFT_VERSION,
@@ -449,20 +425,20 @@ export function RegisterForm() {
         window.requestAnimationFrame(() => errorSummaryRef.current?.focus());
         return;
       }
-      removeStorage(
-        browserStorage("sessionStorage"),
+      removeStorageValue(
+        getBrowserStorage("sessionStorage"),
         REGISTRATION_DRAFT_KEY,
       );
-      removeStorage(browserStorage("localStorage"), REGISTRATION_DRAFT_KEY);
-      removeStorage(
-        browserStorage("localStorage"),
+      removeStorageValue(getBrowserStorage("localStorage"), REGISTRATION_DRAFT_KEY);
+      removeStorageValue(
+        getBrowserStorage("localStorage"),
         LEGACY_REGISTRATION_DRAFT_KEY,
       );
       const email = result.data.email ?? String(form.get("email") ?? "");
       const emailHandoff = createRegistrationEmailHandoff(email);
       if (emailHandoff) {
-        writeStorage(
-          browserStorage("sessionStorage"),
+        writeStorageValue(
+          getBrowserStorage("sessionStorage"),
           REGISTRATION_EMAIL_HANDOFF_KEY,
           emailHandoff,
         );

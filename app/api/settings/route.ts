@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { apiError, apiSuccess } from "@/src/lib/api-response";
 import { isAuthSessionMissing } from "@/src/lib/auth-error-taxonomy";
-import { isValidIanaTimeZone } from "@/src/lib/domain";
+import {
+  assessGoalDirectionConsistency,
+  isValidIanaTimeZone,
+} from "@/src/lib/domain";
 import { isDevelopmentDemo } from "@/src/lib/env";
 import { createSupabaseServerClient } from "@/src/lib/supabase/server";
 
@@ -146,9 +149,84 @@ export async function PATCH(request: Request) {
     }
 
     if (parsed.data.section === "goal") {
+      const [activeGoalResult, baselineResult] = await Promise.all([
+        supabase
+          .from("goals")
+          .select("id,target_weight_kg")
+          .eq("user_id", auth.user.id)
+          .eq("status", "active")
+          .maybeSingle(),
+        supabase
+          .from("weight_entries")
+          .select("weight_kg")
+          .eq("user_id", auth.user.id)
+          .eq("is_onboarding_baseline", true)
+          .maybeSingle(),
+      ]);
+      if (activeGoalResult.error || baselineResult.error) {
+        return apiError(
+          "GOAL_VALIDATION_UNAVAILABLE",
+          "The saved goal details could not be checked.",
+          503,
+          {
+            details: "No goal settings were changed. Check the connection and try again.",
+            retryable: true,
+            action: { kind: "retry", label: "Try saving again" },
+          },
+        );
+      }
+      const activeGoal = activeGoalResult.data;
+      if (!activeGoal) {
+        return apiError(
+          "ACTIVE_GOAL_REQUIRED",
+          "There is no active goal to update.",
+          409,
+        );
+      }
+      const baseline = baselineResult.data;
+      if (!baseline) {
+        return apiError(
+          "GOAL_START_WEIGHT_REQUIRED",
+          "Add a starting weight before changing the goal type.",
+          409,
+          {
+            details:
+              "Return to onboarding, review the goal and starting weight, and save those details before trying again.",
+            retryable: false,
+            action: {
+              kind: "navigate",
+              label: "Review goal and target",
+              href: "/onboarding?step=4",
+            },
+          },
+        );
+      }
+      const goalDirection = assessGoalDirectionConsistency({
+        startingWeightKg: baseline.weight_kg,
+        targetWeightKg: activeGoal.target_weight_kg,
+        goalType: parsed.data.goalType,
+      });
+      if (!goalDirection.consistent) {
+        return apiError(
+          "GOAL_DIRECTION_CONFLICT",
+          "The selected goal type does not match the saved target-weight direction.",
+          422,
+          {
+            details:
+              "Choose a goal type that matches the saved target, or review the target weight in onboarding before trying again.",
+            retryable: false,
+            action: {
+              kind: "navigate",
+              label: "Review goal and target",
+              href: "/onboarding?step=4",
+            },
+          },
+        );
+      }
       const { data: goal, error } = await supabase
         .from("goals")
         .update({ goal_type: parsed.data.goalType })
+        .eq("id", activeGoal.id)
         .eq("user_id", auth.user.id)
         .eq("status", "active")
         .select("id,goal_type,status,target_weight_kg,target_date")
@@ -162,9 +240,14 @@ export async function PATCH(request: Request) {
       }
       if (!goal) {
         return apiError(
-          "ACTIVE_GOAL_REQUIRED",
-          "There is no active goal to update.",
+          "GOAL_SAVE_CONFLICT",
+          "The active goal changed before this update could be saved.",
           409,
+          {
+            details: "No goal settings were changed. Refresh the page and review the current goal.",
+            retryable: true,
+            action: { kind: "retry", label: "Refresh and try again" },
+          },
         );
       }
       return apiSuccess({

@@ -3,6 +3,7 @@ import { apiError, apiSuccess } from "@/src/lib/api-response";
 import { isAuthSessionMissing } from "@/src/lib/auth-error-taxonomy";
 import { PRIMARY_MEAL_TYPES } from "@/src/lib/domain/meal-slots";
 import { isDevelopmentDemo } from "@/src/lib/env";
+import { loadMealPreferenceSummaries } from "@/src/lib/meal-preference-loader";
 import { createSupabaseServerClient } from "@/src/lib/supabase/server";
 
 const preferenceMutationSchema = z
@@ -249,35 +250,9 @@ export async function GET() {
   }
 
   try {
-    const { data: preferences, error: preferenceError } = await supabase
-      .from("meal_preferences")
-      .select("meal_type,food_id,sort_order,id")
-      .eq("user_id", user.id)
-      .order("meal_type")
-      .order("sort_order")
-      .order("id");
-    if (preferenceError) return preferencesLoadUnavailable();
-    const foodIds = [
-      ...new Set((preferences ?? []).map((preference) => preference.food_id)),
-    ];
-    const { data: foods, error: foodError } = foodIds.length
-      ? await supabase
-          .from("foods")
-          .select("id,english_name")
-          .in("id", foodIds)
-      : { data: [], error: null };
-    if (foodError) return preferencesLoadUnavailable();
-    const names = new Map(
-      (foods ?? []).map((food) => [food.id, food.english_name]),
-    );
-    return apiSuccess(
-      (preferences ?? []).map((preference) => ({
-        mealType: preference.meal_type,
-        foodId: preference.food_id,
-        foodName: names.get(preference.food_id) ?? "Unavailable food",
-        sortOrder: preference.sort_order,
-      })),
-    );
+    const result = await loadMealPreferenceSummaries(supabase, user.id);
+    if (result.error) return preferencesLoadUnavailable();
+    return apiSuccess(result.data);
   } catch {
     return preferencesLoadUnavailable();
   }

@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  ALLERGEN_ALIASES,
+  removeNegatedAllergenMentions,
+} from "@/src/lib/allergen-text";
 
 const optionalGrams = z.number().min(0).max(10_000).nullable().optional();
 const optionalEnergy = z.number().min(0).max(100_000).nullable().optional();
@@ -47,44 +51,13 @@ const foodLabelObjectSchema = z
   })
   .strict();
 
-const allergenAliases: Record<string, RegExp> = {
-  milk: /\b(?:milk|dairy|whey|casein|caseinate|lactalbumin)\b/i,
-  egg: /\b(?:eggs?|albumen|ovalbumin)\b/i,
-  fish: /\b(?:fish|anchov(?:y|ies)|cod|salmon|tuna)\b/i,
-  shellfish: /\b(?:shellfish|shrimp|prawn|crab|lobster|crayfish)\b/i,
-  "tree-nuts":
-    /\b(?:tree[- ]?nuts?|almonds?|cashews?|walnuts?|pecans?|pistachios?|hazelnuts?|macadamias?|brazil[- ]?nuts?)\b/i,
-  peanuts: /\bpeanuts?\b/i,
-  wheat: /\b(?:wheat|spelt|semolina|durum)\b/i,
-  soy: /\b(?:soy|soya)\b/i,
-  sesame: /\bsesame\b/i,
-};
-
-const allergenNegativeAlias =
-  "(?:milk|dairy|whey|casein|caseinate|lactalbumin|eggs?|albumen|ovalbumin|fish|anchov(?:y|ies)|cod|salmon|tuna|shellfish|shrimp|prawn|crab|lobster|crayfish|tree[- ]?nuts?|almonds?|cashews?|walnuts?|pecans?|pistachios?|hazelnuts?|macadamias?|brazil[- ]?nuts?|peanuts?|wheat|spelt|semolina|durum|soy|soya|sesame)";
-
-export function removeNegatedAllergenMentions(statement: string) {
-  return statement
-    .replace(
-      new RegExp(`\\b${allergenNegativeAlias}[- ]free\\b`, "gi"),
-      "",
-    )
-    .replace(
-      new RegExp(
-        `\\b(?:no|without|free\\s+from)\\s+(?:declared\\s+)?${allergenNegativeAlias}(?:\\s*(?:,|and|or)\\s*${allergenNegativeAlias})*`,
-        "gi",
-      ),
-      "",
-    );
-}
-
 function validateAllergenSelections(
   value: z.infer<typeof foodLabelObjectSchema>,
   context: z.RefinementCtx,
 ) {
   const statement = removeNegatedAllergenMentions(value.allergenStatement);
   const selected = new Set(value.allergenSlugs);
-  for (const [slug, pattern] of Object.entries(allergenAliases)) {
+  for (const [slug, pattern] of Object.entries(ALLERGEN_ALIASES)) {
     if (pattern.test(statement) && !selected.has(slug)) {
       context.addIssue({
         code: "custom",

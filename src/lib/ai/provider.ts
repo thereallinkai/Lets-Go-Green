@@ -64,7 +64,7 @@ function item(food: ProviderFood, quantity: number) {
   };
 }
 
-export class MockPlanProvider implements PlanProvider {
+class MockPlanProvider implements PlanProvider {
   readonly mode = "mock" as const;
   readonly model = "deterministic-mock-v1";
 
@@ -125,7 +125,7 @@ export class MockPlanProvider implements PlanProvider {
   }
 }
 
-export class OpenAIPlanProvider implements PlanProvider {
+class OpenAIPlanProvider implements PlanProvider {
   readonly mode = "openai" as const;
   readonly model: string;
   private readonly client: OpenAI;

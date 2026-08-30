@@ -1,9 +1,11 @@
+import type {
+  FoodNutritionFacts,
+  FoodSourceSummary,
+} from "@/src/lib/domain/food-catalog";
 import {
   measurementBasisLabel,
   verificationLabel,
-  type FoodNutritionFacts,
-  type FoodSourceSummary,
-} from "@/src/lib/domain/food-catalog";
+} from "@/src/lib/food-catalog-labels";
 
 function value(
   amount: number | null | undefined,

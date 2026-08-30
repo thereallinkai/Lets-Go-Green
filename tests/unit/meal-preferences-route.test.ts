@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("server-only", () => ({}));
+
 const routeState = vi.hoisted(() => ({
   client: null as unknown,
 }));
@@ -329,6 +331,7 @@ describe("meal preference settings route", () => {
           meal_type: "breakfast",
           food_id: foodId,
           sort_order: 0,
+          food: { english_name: "Apple" },
         },
       ],
       error: null,
@@ -337,16 +340,7 @@ describe("meal preference settings route", () => {
     const preferenceOrderMeal = vi.fn(() => ({ order: preferenceOrderSort }));
     const preferenceEq = vi.fn(() => ({ order: preferenceOrderMeal }));
     const preferenceSelect = vi.fn(() => ({ eq: preferenceEq }));
-    const foodIn = vi.fn().mockResolvedValue({
-      data: [{ id: foodId, english_name: "Apple" }],
-      error: null,
-    });
-    const foodSelect = vi.fn(() => ({ in: foodIn }));
-    const from = vi.fn((table: string) =>
-      table === "meal_preferences"
-        ? { select: preferenceSelect }
-        : { select: foodSelect },
-    );
+    const from = vi.fn(() => ({ select: preferenceSelect }));
     routeState.client = authenticatedClient({ from });
 
     const response = await GET();

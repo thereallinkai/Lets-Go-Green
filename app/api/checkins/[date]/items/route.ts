@@ -130,22 +130,7 @@ export async function POST(
         500,
       );
     }
-    const { data: food, error: foodError } = await supabase
-      .from("foods")
-      .select("id,english_name,verification_status")
-      .eq("id", parsed.data.foodId)
-      .maybeSingle();
-    return apiSuccess(
-      {
-        id: data.id,
-        localDate: date,
-        mealType: parsed.data.mealType,
-        foodId: parsed.data.foodId,
-        food: foodError ? null : food,
-        reconciliationRequired: Boolean(foodError || !food),
-      },
-      201,
-    );
+    return apiSuccess({ id: data.id }, 201);
   } catch {
     return apiError(
       "SERVICE_UNAVAILABLE",

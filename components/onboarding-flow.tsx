@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -36,6 +37,7 @@ import {
   clientApiError,
 } from "@/src/lib/client-api-error";
 import { DEMO_CATALOG } from "@/src/lib/demo-catalog";
+import { interpretPlanGenerationResponse } from "@/src/lib/plan-generation-response";
 import {
   normalizeMealFoodSlugs,
   parseOptionalHeight,
@@ -46,13 +48,23 @@ import { HeightPicker } from "@/components/height-picker";
 import { ApiErrorNotice } from "@/components/api-error-notice";
 import { BRAND } from "@/src/lib/brand";
 import {
-  FoodSearchPicker,
-  type FoodPickerItem,
-} from "@/components/food-search-picker";
+  LEGACY_REGISTRATION_DRAFT_KEY,
+  REGISTRATION_DRAFT_KEY,
+  getBrowserStorage,
+  readStorageValue,
+  removeStorageValue,
+  writeStorageValue,
+} from "@/src/lib/browser-storage";
+import type { FoodPickerItem } from "@/components/food-search-picker";
 import type {
   FoodNutritionFacts,
   FoodSourceSummary,
 } from "@/src/lib/domain/food-catalog";
+import {
+  assessGoalDirectionConsistency,
+  normalizeGoalType,
+} from "@/src/lib/domain/goals";
+import { validateMealCategories } from "@/src/lib/domain/meal-guidance";
 import {
   PRIMARY_MEAL_TYPES,
   type PrimaryMealType,
@@ -90,11 +102,23 @@ type OnboardingFocusTarget = {
 
 type Food = FoodPickerItem;
 
+const FoodSearchPicker = dynamic(
+  () =>
+    import("@/components/food-search-picker").then(
+      (module) => module.FoodSearchPicker,
+    ),
+  {
+    loading: () => (
+      <div className="message-box" role="status">
+        Loading food search…
+      </div>
+    ),
+  },
+);
+
 const ONBOARDING_DRAFT_KEY_PREFIX = "lets-go-green-onboarding-draft";
 const UNSCOPED_ONBOARDING_DRAFT_KEY = "lets-go-green-onboarding-draft";
 const LEGACY_ONBOARDING_DRAFT_KEY = "cutting-plan-onboarding-draft";
-const REGISTRATION_DRAFT_KEY = "lets-go-green-registration-draft";
-const LEGACY_REGISTRATION_DRAFT_KEY = "cutting-plan-registration-draft";
 
 const GOAL_TYPES = new Set([
   "fat_loss",
@@ -109,39 +133,6 @@ const WARNING_CODES = new Set([
   "missing_protein",
   "missing_vegetable",
 ]);
-
-function browserStorage(kind: "localStorage" | "sessionStorage") {
-  try {
-    return window[kind];
-  } catch {
-    return null;
-  }
-}
-
-function readStorage(storage: Storage | null, key: string) {
-  try {
-    return storage?.getItem(key) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function writeStorage(storage: Storage | null, key: string, value: string) {
-  try {
-    storage?.setItem(key, value);
-    return storage !== null;
-  } catch {
-    return false;
-  }
-}
-
-function removeStorage(storage: Storage | null, key: string) {
-  try {
-    storage?.removeItem(key);
-  } catch {
-    // Account persistence still works when browser storage is unavailable.
-  }
-}
 
 function scopedOnboardingDraftKey(ownerKey: string | null | undefined) {
   if (
@@ -216,13 +207,6 @@ type OnboardingErrorContext =
   | "complete-today"
   | "complete-generate"
   | "generate";
-
-type PlanGenerationResult = ApiFailure & {
-  data?: {
-    planId?: string | null;
-    status?: string;
-  } | null;
-};
 
 function normalizeRestoredDraft(value: unknown): Partial<Draft> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -432,6 +416,15 @@ function completionFailure(
         ?? "Enter weights from 20 to 500 kg, or the equivalent in pounds.",
     };
   }
+  if (code === "GOAL_DIRECTION_CONFLICT") {
+    return {
+      field: "goalType",
+      heading: "Review your goal and target weight.",
+      message:
+        serverMessage
+        ?? "Choose a goal type that matches the target-weight direction.",
+    };
+  }
   if (code === "TARGET_DATE_REQUIRED" || code === "INVALID_TARGET_DATE") {
     return {
       field: "targetDate",
@@ -566,6 +559,7 @@ const errorCodeFields: Record<string, keyof typeof fieldFocusTargets> = {
   INSUFFICIENT_ELIGIBLE_FOODS: "mealPreferences",
   INVALID_CURRENT_WEIGHT: "currentWeight",
   INVALID_TARGET_WEIGHT: "targetWeight",
+  GOAL_DIRECTION_CONFLICT: "goalType",
   TARGET_DATE_REQUIRED: "targetDate",
   INVALID_TARGET_DATE: "targetDate",
   INVALID_HEIGHT: "height",
@@ -789,6 +783,22 @@ export function OnboardingFlow({
   const registrationEmailRef = useRef<string | null | undefined>(undefined);
   const legacyEmailSanitizedRef = useRef(false);
   const localDraftChangedRef = useRef(false);
+  const catalogFoodsById = useMemo(
+    () => new Map(catalogFoods.map((food) => [food.id, food])),
+    [catalogFoods],
+  );
+  const mealCategoryWarnings = useMemo(() => {
+    const selectedFoods = (meal: Meal) =>
+      draft.meals[meal].flatMap((id) => {
+        const food = catalogFoodsById.get(id);
+        return food ? [food] : [];
+      });
+    return validateMealCategories({
+      breakfast: selectedFoods("breakfast"),
+      lunch: selectedFoods("lunch"),
+      dinner: selectedFoods("dinner"),
+    });
+  }, [catalogFoodsById, draft.meals]);
 
   function markDraftLocallyChanged() {
     localDraftChangedRef.current = true;
@@ -1062,12 +1072,12 @@ export function OnboardingFlow({
         : current,
     );
 
-    const local = browserStorage("localStorage");
+    const local = getBrowserStorage("localStorage");
     // Unscoped pre-Beta.3 drafts cannot be safely attributed on a shared
     // browser, so remove them without restoring their sensitive contents.
-    removeStorage(local, UNSCOPED_ONBOARDING_DRAFT_KEY);
-    removeStorage(local, LEGACY_ONBOARDING_DRAFT_KEY);
-    const saved = browserDraftKey ? readStorage(local, browserDraftKey) : null;
+    removeStorageValue(local, UNSCOPED_ONBOARDING_DRAFT_KEY);
+    removeStorageValue(local, LEGACY_ONBOARDING_DRAFT_KEY);
+    const saved = browserDraftKey ? readStorageValue(local, browserDraftKey) : null;
     let browserSavedAt = 0;
     setBrowserDraftAvailable(Boolean(local && browserDraftKey));
     setOnboardingCompletionSaved(false);
@@ -1088,7 +1098,7 @@ export function OnboardingFlow({
         generationKeyRef.current = restored.generationKey;
         setGenerationRecoveryKey(restored.generationKey);
       } catch {
-        if (browserDraftKey) removeStorage(local, browserDraftKey);
+        if (browserDraftKey) removeStorageValue(local, browserDraftKey);
       }
     }
     if (safeInitialStep === 2 && !browserDraftKey) {
@@ -1121,8 +1131,8 @@ export function OnboardingFlow({
       );
       return () => window.clearTimeout(unavailableTimer);
     }
-    const saved = writeStorage(
-      browserStorage("localStorage"),
+    const saved = writeStorageValue(
+      getBrowserStorage("localStorage"),
       browserDraftKey,
       JSON.stringify({
         version: 1,
@@ -1197,6 +1207,23 @@ export function OnboardingFlow({
     if (!Number.isFinite(value)) return null;
     return convertWeight(value, draft.unit, "kg");
   }, [draft.targetWeight, draft.unit]);
+  const goalDirection = useMemo(() => {
+    const goalType = normalizeGoalType(draft.goalType);
+    if (
+      !goalType ||
+      currentKg === null ||
+      currentKg <= 0 ||
+      targetKg === null ||
+      targetKg <= 0
+    ) {
+      return null;
+    }
+    return assessGoalDirectionConsistency({
+      startingWeightKg: currentKg,
+      targetWeightKg: targetKg,
+      goalType,
+    });
+  }, [currentKg, draft.goalType, targetKg]);
 
   function showPageErrors(
     errors: PageError[],
@@ -1293,6 +1320,12 @@ export function OnboardingFlow({
       errors.push({
         field: "goalType",
         message: "Choose a goal type.",
+      });
+    } else if (goalDirection && !goalDirection.consistent) {
+      errors.push({
+        field: "goalType",
+        message:
+          "Choose a goal type that matches the target-weight direction.",
       });
     }
     if (!draft.targetDate) {
@@ -1398,28 +1431,20 @@ export function OnboardingFlow({
   }
 
   function missingCategories(meal: Meal) {
-    const required: Record<Meal, string[]> = {
-      breakfast: ["Carbohydrate", "Protein"],
-      lunch: ["Carbohydrate", "Protein", "Vegetable"],
-      dinner: ["Carbohydrate", "Protein", "Vegetable"],
-    };
-    const categories = new Set(
-      draft.meals[meal].flatMap(
-        (id) =>
-          catalogFoods.find((food) => food.id === id)?.categories ?? [],
-      ),
-    );
-    return required[meal].filter((category) => !categories.has(category));
+    return mealCategoryWarnings
+      .filter((warning) => warning.mealType === meal)
+      .map(
+        ({ missingCategory }) =>
+          missingCategory[0].toUpperCase() + missingCategory.slice(1),
+      );
   }
 
   function mealWarnings(): AcknowledgedWarning[] {
-    return (Object.keys(draft.meals) as Meal[]).flatMap((meal) =>
-      missingCategories(meal).map((category) => ({
-        mealType: meal,
-        warningCode: `missing_${category.toLowerCase()}`,
-        contextVersion: "meal-composition-v1" as const,
-      })),
-    );
+    return mealCategoryWarnings.map((warning) => ({
+      mealType: warning.mealType,
+      warningCode: warning.code,
+      contextVersion: "meal-composition-v1" as const,
+    }));
   }
 
   function mealEligibilityErrors(): PageError[] {
@@ -1427,7 +1452,7 @@ export function OnboardingFlow({
       ...new Set((Object.values(draft.meals) as string[][]).flat()),
     ];
     const ineligibleNames = selectedIds.flatMap((id) => {
-      const food = catalogFoods.find((item) => item.id === id);
+      const food = catalogFoodsById.get(id);
       if (food?.planEligible) return [];
       return [food?.name ?? id];
     });
@@ -1535,9 +1560,9 @@ export function OnboardingFlow({
         return;
       }
       await loadCatalogFoods();
-      const local = browserStorage("localStorage");
-      removeStorage(local, REGISTRATION_DRAFT_KEY);
-      removeStorage(local, LEGACY_REGISTRATION_DRAFT_KEY);
+      const local = getBrowserStorage("localStorage");
+      removeStorageValue(local, REGISTRATION_DRAFT_KEY);
+      removeStorageValue(local, LEGACY_REGISTRATION_DRAFT_KEY);
       // Email verification may establish the first authenticated server
       // session. Refresh the server props so subsequent browser drafts receive
       // this account's private storage scope without exposing it in the URL.
@@ -1677,8 +1702,8 @@ export function OnboardingFlow({
 
   function persistCompletionRecovery(generationKey: string | null) {
     if (!browserDraftKey) return;
-    const saved = writeStorage(
-      browserStorage("localStorage"),
+    const saved = writeStorageValue(
+      getBrowserStorage("localStorage"),
       browserDraftKey,
       JSON.stringify({
         version: 1,
@@ -1696,7 +1721,7 @@ export function OnboardingFlow({
     if (onboardingCompletionSaved) {
       safeNavigationStartedRef.current = true;
       if (browserDraftKey) {
-        removeStorage(browserStorage("localStorage"), browserDraftKey);
+        removeStorageValue(getBrowserStorage("localStorage"), browserDraftKey);
       }
       router.push("/today");
       return;
@@ -1743,13 +1768,13 @@ export function OnboardingFlow({
       if (draftPersistenceIssue?.operation === "load") {
         let browserSavedAt = 0;
         if (browserDraftKey) {
-          const local = browserStorage("localStorage");
-          const saved = readStorage(local, browserDraftKey);
+          const local = getBrowserStorage("localStorage");
+          const saved = readStorageValue(local, browserDraftKey);
           if (saved) {
             try {
               browserSavedAt = parseStoredDraft(saved).savedAt;
             } catch {
-              removeStorage(local, browserDraftKey);
+              removeStorageValue(local, browserDraftKey);
             }
           }
         }
@@ -1904,7 +1929,7 @@ export function OnboardingFlow({
     if (!generate) {
       safeNavigationStartedRef.current = true;
       if (browserDraftKey) {
-        removeStorage(browserStorage("localStorage"), browserDraftKey);
+        removeStorageValue(getBrowserStorage("localStorage"), browserDraftKey);
       }
       router.push("/today");
       return;
@@ -1924,24 +1949,42 @@ export function OnboardingFlow({
       });
       const generationResult =
         typeof generationResponse.json === "function"
-          ? ((await generationResponse.json().catch(() => null)) as
-              | PlanGenerationResult
-              | null)
+          ? await generationResponse.json().catch(() => null)
           : null;
-      if (!generationResponse.ok) {
-        generationKeyRef.current = null;
-        setGenerationRecoveryKey(null);
-        persistCompletionRecovery(null);
+      const generationDecision = interpretPlanGenerationResponse({
+        ok: generationResponse.ok,
+        status: generationResponse.status,
+        payload: generationResult,
+      });
+      if (
+        generationDecision.kind === "terminal_failure" ||
+        generationDecision.kind === "ambiguous_failure"
+      ) {
+        const terminal = generationDecision.kind === "terminal_failure";
+        if (terminal) {
+          generationKeyRef.current = null;
+          setGenerationRecoveryKey(null);
+          persistCompletionRecovery(null);
+        }
         showApiError(
           apiErrorFromPayload(
             generationResult,
             clientApiError(
-              "PLAN_RESPONSE_INVALID",
-              "A new plan could not be generated.",
-              "Your profile is saved and any accepted plan is unchanged. Try one new generation request, or go to Today.",
+              terminal
+                ? "PLAN_RESPONSE_INVALID"
+                : "PLAN_RESPONSE_UNCONFIRMED",
+              terminal
+                ? "A new plan could not be generated."
+                : "The plan request outcome could not be confirmed.",
+              terminal
+                ? "Your profile is saved and any accepted plan is unchanged. Try one new generation request, or go to Today."
+                : "Your profile is saved and any accepted plan is unchanged. Check the same request again, or go to Today.",
               {
                 retryable: true,
-                action: { kind: "retry", label: "Generate again" },
+                action: {
+                  kind: "retry",
+                  label: terminal ? "Generate again" : "Check again",
+                },
               },
             ),
           ),
@@ -1950,11 +1993,7 @@ export function OnboardingFlow({
         );
         return;
       }
-      if (
-        generationResponse.status === 202 ||
-        generationResult?.data?.status === "pending" ||
-        generationResult?.data?.status === "processing"
-      ) {
+      if (generationDecision.kind === "pending") {
         showPageErrors(
           [
             {
@@ -1967,41 +2006,21 @@ export function OnboardingFlow({
         );
         return;
       }
-      const planId = generationResult?.data?.planId;
-      if (typeof planId !== "string" || !planId.trim()) {
-        generationKeyRef.current = null;
-        setGenerationRecoveryKey(null);
-        persistCompletionRecovery(null);
-        showApiError(
-          clientApiError(
-            "PLAN_RESULT_MISSING",
-            "The completed request did not include a plan.",
-            "Your profile is saved and any accepted plan is unchanged. Try one new generation request, or go to Today.",
-            {
-              retryable: true,
-              action: { kind: "retry", label: "Generate again" },
-            },
-          ),
-          "Your profile is complete.",
-          "generate",
-        );
-        return;
-      }
       generationKeyRef.current = null;
       safeNavigationStartedRef.current = true;
       if (browserDraftKey) {
-        removeStorage(browserStorage("localStorage"), browserDraftKey);
+        removeStorageValue(getBrowserStorage("localStorage"), browserDraftKey);
       }
       router.push("/plan");
     } catch {
       showApiError(
         clientApiError(
           "PLAN_NETWORK_ERROR",
-          "Plan generation could not start.",
-          "Your profile is saved and any accepted plan is unchanged. Check the connection, then try Generate my plan again or go to Today.",
+          "The plan request outcome could not be confirmed.",
+          "Your profile is saved and any accepted plan is unchanged. Check the connection, then check the same request again or go to Today.",
           {
             retryable: true,
-            action: { kind: "retry", label: "Generate again" },
+            action: { kind: "retry", label: "Check again" },
           },
         ),
         "Your profile is complete.",
@@ -2410,32 +2429,154 @@ export function OnboardingFlow({
           {step === 4 ? (
             <>
               <p className="eyebrow">Step 4 of 6</p>
-              <h1 id="onboarding-step-heading" tabIndex={-1}>Set a direction, not a promise.</h1>
-              <p>We&apos;ll show the implied pace and flag conflicts without forcing restriction to meet a date.</p>
-              <div className="option-grid" style={{ marginBottom: "1rem" }}>
+              <h1 id="onboarding-step-heading" tabIndex={-1}>
+                Set a direction, not a promise.
+              </h1>
+              <p>
+                We&apos;ll show the implied pace and flag conflicts without
+                forcing restriction to meet a date.
+              </p>
+              <fieldset
+                aria-describedby={
+                  goalDirection
+                    ? "onboarding-goal-direction-guidance"
+                    : undefined
+                }
+                className="option-grid"
+                style={{
+                  border: 0,
+                  marginBottom: "1rem",
+                  minInlineSize: 0,
+                  padding: 0,
+                }}
+              >
+                <legend className="sr-only">Wellness goal</legend>
                 {[
-                  ["fat_loss", "Fat loss"], ["muscle_gain", "Muscle gain"], ["maintenance", "Maintenance"], ["recomposition", "Recomposition"],
+                  ["fat_loss", "Fat loss"],
+                  ["muscle_gain", "Muscle gain"],
+                  ["maintenance", "Maintenance"],
+                  ["recomposition", "Recomposition"],
                 ].map(([value, label]) => (
-                  <label className="option-card" key={value}><input type="radio" name="goal" checked={draft.goalType === value} onChange={() => update("goalType", value)} />{label}</label>
+                  <label className="option-card" key={value}>
+                    <input
+                      aria-invalid={
+                        hasPageError("goalType") ||
+                        Boolean(goalDirection && !goalDirection.consistent) ||
+                        undefined
+                      }
+                      checked={draft.goalType === value}
+                      name="goal"
+                      onChange={() => update("goalType", value)}
+                      type="radio"
+                    />
+                    {label}
+                  </label>
                 ))}
-              </div>
-              <div className="field-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
-                <label className="field"><span>Current weight</span><input id="onboarding-current-weight" inputMode="decimal" aria-invalid={hasPageError("currentWeight") || undefined} value={draft.currentWeight} onChange={(event) => update("currentWeight", event.target.value)} /></label>
-                <label className="field"><span>Target weight</span><input id="onboarding-target-weight" inputMode="decimal" aria-invalid={hasPageError("targetWeight") || undefined} value={draft.targetWeight} onChange={(event) => update("targetWeight", event.target.value)} /></label>
-                <label className="field"><span>Display unit</span><select value={draft.unit} onChange={(event) => switchUnit(event.target.value as Unit)}><option value="kg">kg</option><option value="lb">lb</option></select></label>
-                <label className="field"><span>Target date</span><input id="onboarding-target-date" type="date" aria-invalid={hasPageError("targetDate") || undefined} value={draft.targetDate} onChange={(event) => update("targetDate", event.target.value)} /></label>
+              </fieldset>
+              <div
+                className="field-grid"
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: "1rem",
+                }}
+              >
+                <label className="field">
+                  <span>Current weight</span>
+                  <input
+                    aria-describedby={
+                      goalDirection
+                        ? "onboarding-goal-direction-guidance"
+                        : undefined
+                    }
+                    aria-invalid={
+                      hasPageError("currentWeight") || undefined
+                    }
+                    id="onboarding-current-weight"
+                    inputMode="decimal"
+                    onChange={(event) =>
+                      update("currentWeight", event.target.value)
+                    }
+                    value={draft.currentWeight}
+                  />
+                </label>
+                <label className="field">
+                  <span>Target weight</span>
+                  <input
+                    aria-describedby={
+                      goalDirection
+                        ? "onboarding-goal-direction-guidance"
+                        : undefined
+                    }
+                    aria-invalid={
+                      hasPageError("targetWeight") || undefined
+                    }
+                    id="onboarding-target-weight"
+                    inputMode="decimal"
+                    onChange={(event) =>
+                      update("targetWeight", event.target.value)
+                    }
+                    value={draft.targetWeight}
+                  />
+                </label>
+                <label className="field">
+                  <span>Display unit</span>
+                  <select
+                    onChange={(event) =>
+                      switchUnit(event.target.value as Unit)
+                    }
+                    value={draft.unit}
+                  >
+                    <option value="kg">kg</option>
+                    <option value="lb">lb</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Target date</span>
+                  <input
+                    aria-invalid={hasPageError("targetDate") || undefined}
+                    id="onboarding-target-date"
+                    onChange={(event) =>
+                      update("targetDate", event.target.value)
+                    }
+                    type="date"
+                    value={draft.targetDate}
+                  />
+                </label>
               </div>
               {currentKg && targetKg ? (
-                <div className="message-box" style={{ marginTop: "1rem" }}>
+                <div
+                  className="message-box"
+                  id="onboarding-goal-direction-guidance"
+                  role="status"
+                  style={{ marginTop: "1rem" }}
+                >
                   <span>
-                    Desired change: {Math.abs(currentKg - targetKg).toFixed(1)} kg.{" "}
-                    {draft.goalType === "fat_loss" && targetKg > currentKg ? "The target direction conflicts with a fat-loss goal. Review either the goal type or target weight." : "The app will calculate the remaining days and implied weekly change from the selected date."}
+                    Desired change: {Math.abs(currentKg - targetKg).toFixed(1)}
+                    kg.{" "}
+                    {goalDirection && !goalDirection.consistent
+                      ? "The target direction conflicts with the selected goal. Review either the goal type or target weight."
+                      : "The app will calculate the remaining days and implied weekly change from the selected date."}
                   </span>
                 </div>
               ) : null}
               <div className="onboarding-actions">
-                <button className="button button-quiet" type="button" onClick={() => goToStep(3)}><ArrowLeft size={17} /> Back</button>
-                <div><button className="button button-dark" type="button" onClick={continueFromGoal}>Continue <ArrowRight size={17} /></button></div>
+                <button
+                  className="button button-quiet"
+                  onClick={() => goToStep(3)}
+                  type="button"
+                >
+                  <ArrowLeft size={17} /> Back
+                </button>
+                <div>
+                  <button
+                    className="button button-dark"
+                    onClick={continueFromGoal}
+                    type="button"
+                  >
+                    Continue <ArrowRight size={17} />
+                  </button>
+                </div>
               </div>
             </>
           ) : null}

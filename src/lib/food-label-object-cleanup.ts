@@ -5,7 +5,7 @@ export type FoodLabelAdminClient = ReturnType<
   typeof createSupabaseAdminClient
 >;
 
-export type TrustedFoodLabelRpcResult = {
+type TrustedFoodLabelRpcResult = {
   data: unknown;
   error: { code?: string; message?: string } | null;
 };

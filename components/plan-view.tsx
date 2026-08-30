@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState, type KeyboardEvent } from "react";
+import { useId, useRef, useState, type KeyboardEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -16,11 +16,19 @@ import { ApiErrorNotice } from "@/components/api-error-notice";
 import type { ApiError } from "@/src/lib/api-response";
 import {
   apiErrorFromResponse,
+  apiErrorFromPayload,
   apiErrorFromThrown,
   clientApiError,
 } from "@/src/lib/client-api-error";
+import { interpretPlanGenerationResponse } from "@/src/lib/plan-generation-response";
+import {
+  getBrowserStorage,
+  readStorageValue,
+  removeStorageValue,
+  writeStorageValue,
+} from "@/src/lib/browser-storage";
 
-export type PlanFoodDisplay = [
+type PlanFoodDisplay = [
   name: string,
   quantity: string,
   basis: string,
@@ -29,11 +37,15 @@ export type PlanFoodDisplay = [
   substitutionGroup?: string | null,
 ];
 
-export type PlanMealDisplay = {
+type PlanMealDisplay = {
   title: string;
   summary: string;
   foods: PlanFoodDisplay[];
 };
+
+const PLAN_GENERATION_RECOVERY_KEY =
+  "lets-go-green-plan-generation-idempotency-key";
+const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,128}$/;
 
 export type PlanDayDisplay = {
   label: string;
@@ -162,13 +174,23 @@ export function PlanView({
   const [accepting, setAccepting] = useState(false);
   const [announcement, setAnnouncement] = useState("");
   const [operationError, setOperationError] = useState<ApiError | null>(null);
+  const [generationPending, setGenerationPending] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const generationKeyRef = useRef<string | null>(null);
   const activeDayIndex = days.length ? Math.min(day, days.length - 1) : 0;
   const activeDay = days[activeDayIndex] ?? { label: "Day 1", meals: [] };
   const panelId = `${tabIdPrefix}-panel`;
   const activeTabId = days.length
     ? `${tabIdPrefix}-tab-${activeDayIndex}`
     : undefined;
+
+  function clearGenerationKey() {
+    generationKeyRef.current = null;
+    removeStorageValue(
+      getBrowserStorage("sessionStorage"),
+      PLAN_GENERATION_RECOVERY_KEY,
+    );
+  }
 
   async function generate() {
     const fallback = clientApiError(
@@ -178,36 +200,80 @@ export function PlanView({
       { retryable: true, action: { kind: "retry", label: "Try generating again" } },
     );
     setOperationError(null);
+    setGenerationPending(false);
     setStatus("generating");
     setAnnouncement("Plan generation started. You may navigate away safely.");
     try {
+      const session = getBrowserStorage("sessionStorage");
+      const storedKey = readStorageValue(
+        session,
+        PLAN_GENERATION_RECOVERY_KEY,
+      );
+      const idempotencyKey =
+        generationKeyRef.current ??
+        (storedKey && IDEMPOTENCY_KEY_PATTERN.test(storedKey)
+          ? storedKey
+          : crypto.randomUUID());
+      generationKeyRef.current = idempotencyKey;
+      writeStorageValue(
+        session,
+        PLAN_GENERATION_RECOVERY_KEY,
+        idempotencyKey,
+      );
       const response = await fetch("/api/plans/generate", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ idempotencyKey: crypto.randomUUID() }),
+        body: JSON.stringify({ idempotencyKey }),
       });
-      if (!response.ok) {
-        throw await apiErrorFromResponse(response, fallback);
+      const payload =
+        typeof response.json === "function"
+          ? await response.json().catch(() => null)
+          : null;
+      const decision = interpretPlanGenerationResponse({
+        ok: response.ok,
+        status: response.status,
+        payload,
+      });
+      if (
+        decision.kind === "terminal_failure" ||
+        decision.kind === "ambiguous_failure"
+      ) {
+        const publicError =
+          response.ok && decision.kind === "ambiguous_failure"
+            ? clientApiError(
+                "PLAN_RESPONSE_INVALID",
+                "The generated plan response was incomplete.",
+                "Your accepted plan is unchanged. Check the same generation request again.",
+                {
+                  retryable: true,
+                  action: {
+                    kind: "retry",
+                    label: "Check generation again",
+                  },
+                },
+              )
+            : apiErrorFromPayload(payload, fallback);
+        if (decision.kind === "terminal_failure") {
+          clearGenerationKey();
+        }
+        throw publicError;
       }
-      const result = (await response.json()) as {
-        data?: { planId?: string | null };
-      };
-      const planId = result.data?.planId;
-      if (typeof planId !== "string" || !planId.trim()) {
-        throw clientApiError(
-          "PLAN_RESPONSE_INVALID",
-          "The generated plan response was incomplete.",
-          "Your accepted plan is unchanged. Try generating a new draft again.",
-          { retryable: true, action: { kind: "retry", label: "Try generating again" } },
+      if (decision.kind === "pending") {
+        setStatus(initialStatus);
+        setGenerationPending(true);
+        setAnnouncement(
+          "Plan generation is still processing. Check the same request again shortly.",
         );
+        return;
       }
+      clearGenerationKey();
       if (serverBacked) {
         setAnnouncement("A new draft is ready. Loading it for review.");
         router.replace("/plan");
         router.refresh();
         return;
       }
-      setReviewPlanId(planId);
+      setReviewPlanId(decision.planId);
       setStatus("draft");
       setAnnouncement(
         "A new draft is ready. Your accepted plan has not changed.",
@@ -215,6 +281,7 @@ export function PlanView({
     } catch (error) {
       const publicError = apiErrorFromThrown(error, fallback);
       setStatus(initialStatus);
+      setGenerationPending(false);
       setOperationError(publicError);
       setAnnouncement(
         "Plan generation could not finish. Your accepted plan is unchanged.",
@@ -337,6 +404,16 @@ export function PlanView({
           error={operationError}
           heading="We could not complete that plan action"
         />
+      ) : null}
+
+      {generationPending ? (
+        <div className="message-box" role="status">
+          <Clock3 size={18} aria-hidden="true" />
+          <span>
+            Plan generation is still processing. Wait a moment, then choose
+            Generate new draft again to check the same request.
+          </span>
+        </div>
       ) : null}
 
       {showHistory ? (

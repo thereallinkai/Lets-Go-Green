@@ -39,6 +39,12 @@ export async function GET() {
   const ready =
     (isDevelopmentDemo() && database === "not_configured") ||
     (database === "reachable" && migration === "compatible");
+  const configuredNativeProjectId =
+    process.env.LETS_GO_GREEN_NATIVE_PROJECT_ID?.trim() ?? "";
+  const nativeProjectId =
+    isDevelopmentDemo() && /^[a-f0-9]{64}$/.test(configuredNativeProjectId)
+      ? configuredNativeProjectId
+      : null;
 
   return apiSuccess({
     application: "available",
@@ -46,5 +52,6 @@ export async function GET() {
     database,
     migration: { status: migration, expected: EXPECTED_MIGRATION },
     aiProvider: getAIProviderMode(),
+    nativeProjectId,
   }, ready ? 200 : 503);
 }

@@ -5,10 +5,10 @@ import {
   localDateInTimeZone,
   normalizeMealSlotCheckins,
   parseLocalDate,
-  type MealSlotCheckin,
 } from "@/src/lib/domain";
 import { apiError, apiSuccess } from "@/src/lib/api-response";
 import { isAuthSessionMissing } from "@/src/lib/auth-error-taxonomy";
+import { loadDayMealCheckins } from "@/src/lib/checkin-loader";
 import { isDevelopmentDemo } from "@/src/lib/env";
 import { createSupabaseServerClient } from "@/src/lib/supabase/server";
 
@@ -46,34 +46,6 @@ const patchSchema = z.discriminatedUnion("kind", [
   noteUpdateSchema,
 ]);
 
-const legacyUpdateSchema = z
-  .object({
-    breakfastCompleted: z.boolean(),
-    lunchCompleted: z.boolean(),
-    dinnerCompleted: z.boolean(),
-    notes: z.string().max(2_000).nullable().optional(),
-  })
-  .strict();
-
-type StoredMealCheckin = {
-  id: string;
-  meal_type: (typeof MEAL_SLOTS)[number];
-  skip_reason: string | null;
-  status: (typeof MEAL_CHECKIN_STATUSES)[number];
-};
-
-type StoredMealItem = {
-  id: string;
-  meal_checkin_id: string;
-  food:
-    | {
-        id: string;
-        english_name: string;
-        verification_status: string;
-      }
-    | null;
-};
-
 function validDate(value: string) {
   try {
     parseLocalDate(value);
@@ -81,18 +53,6 @@ function validDate(value: string) {
   } catch {
     return false;
   }
-}
-
-function toSlotCheckins(
-  rows: readonly StoredMealCheckin[] | null | undefined,
-): MealSlotCheckin[] {
-  return normalizeMealSlotCheckins(
-    (rows ?? []).map((row) => ({
-      mealType: row.meal_type,
-      status: row.status,
-      skipReason: row.skip_reason,
-    })),
-  );
 }
 
 async function context(includeTimeZone = false) {
@@ -199,11 +159,7 @@ export async function GET(
         .eq("user_id", user.id)
         .eq("local_date", date)
         .maybeSingle(),
-      supabase
-        .from("daily_meal_checkins")
-        .select("id,meal_type,status,skip_reason")
-        .eq("user_id", user.id)
-        .eq("local_date", date),
+      loadDayMealCheckins(supabase, user.id, date),
     ]);
     if (dayResult.error || mealsResult.error) {
       return apiError(
@@ -212,53 +168,10 @@ export async function GET(
         500,
       );
     }
-    const mealRows = (mealsResult.data ?? []) as StoredMealCheckin[];
-    const mealIds = mealRows.map((meal) => meal.id);
-    const itemsResult = mealIds.length
-      ? await supabase
-          .from("daily_meal_items")
-          .select(
-            "id,meal_checkin_id,food:foods(id,english_name,verification_status)",
-          )
-          .eq("user_id", user.id)
-          .in("meal_checkin_id", mealIds)
-          .order("sort_order")
-      : { data: [], error: null };
-    if (itemsResult.error) {
-      return apiError(
-        "CHECKIN_LOAD_FAILED",
-        "The recorded foods could not be loaded.",
-        500,
-      );
-    }
-    const itemRows = (itemsResult.data ?? []) as StoredMealItem[];
     return apiSuccess({
       localDate: date,
       notes: dayResult.data?.notes ?? null,
-      slots: toSlotCheckins(mealRows).map((slot) => {
-        const storedMeal = mealRows.find(
-          (meal) => meal.meal_type === slot.mealType,
-        );
-        return {
-          ...slot,
-          items: storedMeal
-            ? itemRows
-                .filter((item) => item.meal_checkin_id === storedMeal.id)
-                .flatMap((item) =>
-                  item.food
-                    ? [
-                        {
-                          id: item.id,
-                          foodId: item.food.id,
-                          name: item.food.english_name,
-                          verificationStatus: item.food.verification_status,
-                        },
-                      ]
-                    : [],
-                )
-            : [],
-        };
-      }),
+      slots: mealsResult.data,
     });
   } catch {
     return apiError(
@@ -385,105 +298,6 @@ export async function PATCH(
       status: data?.status ?? parsed.data.status,
       skipReason: data?.skip_reason ?? null,
     });
-  } catch {
-    return apiError(
-      "SERVICE_UNAVAILABLE",
-      "Check-in services are temporarily unavailable.",
-      503,
-    );
-  }
-}
-
-export async function PUT(
-  request: Request,
-  { params }: { params: Promise<{ date: string }> },
-) {
-  const { date } = await params;
-  if (!validDate(date)) {
-    return apiError(
-      "INVALID_LOCAL_DATE",
-      "Use a valid YYYY-MM-DD local date.",
-      422,
-    );
-  }
-  const requestBody = await request.json().catch(() => null);
-  const parsed = legacyUpdateSchema.safeParse(requestBody);
-  if (!parsed.success) {
-    return apiError(
-      "INVALID_CHECKIN",
-      "Send the desired final state for breakfast, lunch, and dinner.",
-      422,
-    );
-  }
-  if (isDevelopmentDemo()) {
-    return apiSuccess({ localDate: date, ...parsed.data });
-  }
-
-  try {
-    const { supabase, user, authError, timeZone, profileError } =
-      await context(true);
-    if (authError && !isAuthSessionMissing(authError)) {
-      return authUnavailable();
-    }
-    if (!user || isAuthSessionMissing(authError)) {
-      return apiError("SESSION_EXPIRED", "Log in to update check-ins.", 401);
-    }
-    if (profileError) return profileUnavailable();
-    if (!timeZone) {
-      return apiError(
-        "PROFILE_REQUIRED",
-        "Complete profile setup before saving check-ins.",
-        409,
-        {
-          details: "A verified profile and time zone are required for local-date records.",
-          action: { kind: "navigate", label: "Finish profile setup", href: "/onboarding" },
-        },
-      );
-    }
-    if (date > localDateInTimeZone(new Date(), timeZone)) {
-      return apiError(
-        "FUTURE_CHECKIN_DISABLED",
-        "Future meal completion is disabled.",
-        409,
-      );
-    }
-    const notesWereProvided =
-      requestBody !== null &&
-      typeof requestBody === "object" &&
-      Object.prototype.hasOwnProperty.call(requestBody, "notes");
-    const { data, error } = await supabase.rpc("upsert_daily_checkin", {
-      checkin_date: date,
-      desired_breakfast_completed: parsed.data.breakfastCompleted,
-      desired_lunch_completed: parsed.data.lunchCompleted,
-      desired_dinner_completed: parsed.data.dinnerCompleted,
-      ...(typeof parsed.data.notes === "string"
-        ? { checkin_notes: parsed.data.notes }
-        : {}),
-    });
-    if (error) {
-      return apiError(
-        "CHECKIN_SAVE_FAILED",
-        "The check-in could not be saved.",
-        500,
-      );
-    }
-    if (notesWereProvided && parsed.data.notes === null) {
-      const { error: noteError } = await supabase.rpc(
-        "set_daily_checkin_note",
-        {
-          checkin_date: date,
-          desired_note: "",
-        },
-      );
-      if (noteError) {
-        return apiError(
-          "CHECKIN_SAVE_FAILED",
-          "The meal states were saved, but the note could not be cleared.",
-          500,
-        );
-      }
-    }
-    return apiSuccess(data);
   } catch {
     return apiError(
       "SERVICE_UNAVAILABLE",

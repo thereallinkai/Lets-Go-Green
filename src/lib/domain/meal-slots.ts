@@ -26,7 +26,6 @@ export const MEAL_CHECKIN_STATUSES = [
 ] as const;
 
 export type PrimaryMealType = (typeof PRIMARY_MEAL_TYPES)[number];
-export type SnackMealType = (typeof SNACK_MEAL_TYPES)[number];
 export type MealSlot = (typeof MEAL_SLOTS)[number];
 export type MealCheckinStatus = (typeof MEAL_CHECKIN_STATUSES)[number];
 
@@ -49,14 +48,6 @@ export function isPrimaryMealType(
   mealType: MealSlot,
 ): mealType is PrimaryMealType {
   return (PRIMARY_MEAL_TYPES as readonly MealSlot[]).includes(mealType);
-}
-
-export function emptyMealSlotCheckins(): MealSlotCheckin[] {
-  return MEAL_SLOTS.map((mealType) => ({
-    mealType,
-    status: "not_marked",
-    skipReason: null,
-  }));
 }
 
 export function normalizeMealSlotCheckins(

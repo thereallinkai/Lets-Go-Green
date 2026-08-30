@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  assessGoalDirectionConsistency,
   assessGoalTimeline,
   calculateGoalProgress,
   getGoalDirection,
   goalProgressPercentage,
   goalTypeConflictsWithDirection,
+  normalizeGoalType,
 } from "../../src/lib/domain/goals";
 
 describe("goal calculations", () => {
@@ -54,6 +56,41 @@ describe("goal calculations", () => {
     expect(goalTypeConflictsWithDirection("body_recomposition", "loss")).toBe(
       false,
     );
+  });
+
+  it.each([
+    ["fat_loss", 80, 70, "loss", true],
+    ["fat_loss", 80, 90, "gain", false],
+    ["fat_loss", 80, 80, "maintenance", false],
+    ["muscle_gain", 80, 90, "gain", true],
+    ["muscle_gain", 80, 70, "loss", false],
+    ["muscle_gain", 80, 80, "maintenance", false],
+    ["maintenance", 80, 80, "maintenance", true],
+    ["maintenance", 80, 70, "loss", false],
+    ["maintenance", 80, 90, "gain", false],
+    ["body_recomposition", 80, 70, "loss", true],
+    ["body_recomposition", 80, 80, "maintenance", true],
+    ["body_recomposition", 80, 90, "gain", true],
+  ] as const)(
+    "assesses %s from %s kg to %s kg as %s with consistency %s",
+    (goalType, startingWeightKg, targetWeightKg, direction, consistent) => {
+      expect(
+        assessGoalDirectionConsistency({
+          startingWeightKg,
+          targetWeightKg,
+          goalType,
+        }),
+      ).toEqual({ direction, consistent });
+    },
+  );
+
+  it("normalizes the onboarding recomposition name without accepting unknown goals", () => {
+    expect(normalizeGoalType("recomposition")).toBe("body_recomposition");
+    expect(normalizeGoalType("body_recomposition")).toBe(
+      "body_recomposition",
+    );
+    expect(normalizeGoalType("rapid_weight_loss")).toBeNull();
+    expect(normalizeGoalType("toString")).toBeNull();
   });
 
   it("calculates an estimated weekly rate from local calendar dates", () => {
