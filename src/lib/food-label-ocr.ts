@@ -1,6 +1,6 @@
-import { removeNegatedAllergenMentions } from "@/src/lib/domain/food-label";
+import { removeNegatedAllergenMentions } from "@/src/lib/allergen-text";
 
-export type FoodLabelOcrWord = {
+type FoodLabelOcrWord = {
   text: string;
   confidence: number;
 };

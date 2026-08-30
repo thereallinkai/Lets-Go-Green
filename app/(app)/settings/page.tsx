@@ -8,7 +8,8 @@ import {
   getAIProviderMode,
   isDevelopmentDemo,
 } from "@/src/lib/env";
-import { isPrimaryMealType } from "@/src/lib/domain/meal-slots";
+import { APP_RELEASE } from "@/src/lib/app-release";
+import { loadMealPreferenceSummaries } from "@/src/lib/meal-preference-loader";
 import {
   createSupabaseServerClient,
   getCurrentProfile,
@@ -19,6 +20,10 @@ export const metadata: Metadata = { title: "Settings" };
 
 const demoSettings: SettingsInitialData = {
   mode: "demo",
+  release: {
+    channelLabel: APP_RELEASE.channelLabel,
+    displayVersion: APP_RELEASE.displayVersion,
+  },
   account: {
     email: "demo@letsgogreen.local",
     createdAt: null,
@@ -62,7 +67,13 @@ const demoSettings: SettingsInitialData = {
   privateLabelFoods: [],
   activeLabelDrafts: [],
   aiProviderMode: "mock",
-  loadError: null,
+  loadErrors: {
+    profile: null,
+    goal: null,
+    mealPreferences: null,
+    privateLabelFoods: null,
+    activeLabelDrafts: null,
+  },
 };
 
 export default async function SettingsPage() {
@@ -91,12 +102,7 @@ export default async function SettingsPage() {
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle(),
-    supabase
-      .from("meal_preferences")
-      .select("meal_type,food_id,sort_order")
-      .eq("user_id", userId)
-      .order("meal_type")
-      .order("sort_order"),
+    loadMealPreferenceSummaries(supabase, userId),
     supabase
       .from("foods")
       .select(
@@ -130,40 +136,14 @@ export default async function SettingsPage() {
       .limit(50),
   ]);
 
-  const preferenceFoodIds = [
-    ...new Set(
-      (mealPreferencesResult.data ?? []).map(
-        (preference) => preference.food_id,
-      ),
-    ),
-  ];
-  const preferenceFoodsResult = preferenceFoodIds.length
-    ? await supabase
-        .from("foods")
-        .select("id,english_name")
-        .in("id", preferenceFoodIds)
-    : { data: [], error: null };
-  const preferenceFoodNames = new Map(
-    (preferenceFoodsResult.data ?? []).map((food) => [
-      food.id,
-      food.english_name,
-    ]),
-  );
-
   const profile = profileResult.data;
   const goal = goalResult.data;
-  const loadError =
-    profileResult.error ||
-    goalResult.error ||
-    mealPreferencesResult.error ||
-    privateFoodsResult.error ||
-    activeLabelDraftsResult.error ||
-    preferenceFoodsResult.error
-      ? "Stored settings could not be loaded completely. Saving is disabled to avoid overwriting unknown values; reload the page or try again later."
-      : null;
-
   const initialData: SettingsInitialData = {
     mode: "authenticated",
+    release: {
+      channelLabel: APP_RELEASE.channelLabel,
+      displayVersion: APP_RELEASE.displayVersion,
+    },
     account: {
       email: user.email ?? "Email unavailable",
       createdAt: user.created_at,
@@ -188,20 +168,7 @@ export default async function SettingsPage() {
           targetDate: goal.target_date,
         }
       : null,
-    mealPreferences: (mealPreferencesResult.data ?? []).flatMap((preference) =>
-      isPrimaryMealType(preference.meal_type)
-        ? [
-            {
-              mealType: preference.meal_type,
-              foodId: preference.food_id,
-              foodName:
-                preferenceFoodNames.get(preference.food_id) ??
-                "Unavailable food",
-              sortOrder: preference.sort_order,
-            },
-          ]
-        : [],
-    ),
+    mealPreferences: mealPreferencesResult.data,
     privateLabelFoods: (privateFoodsResult.data ?? []).map((food) => {
       const nutrition = food.food_nutrition.find(
         (row) => row.measurement_basis === "label_serving",
@@ -247,7 +214,23 @@ export default async function SettingsPage() {
         : [],
     ),
     aiProviderMode: getAIProviderMode(),
-    loadError,
+    loadErrors: {
+      profile: profileResult.error
+        ? "Profile settings could not be loaded. Reload before editing profile or preference values."
+        : null,
+      goal: goalResult.error
+        ? "The active goal could not be loaded. Reload before changing its type."
+        : null,
+      mealPreferences: mealPreferencesResult.error
+        ? "Meal preferences could not be loaded. Reload before editing saved meal foods."
+        : null,
+      privateLabelFoods: privateFoodsResult.error
+        ? "Saved private label foods could not be loaded. Their current state is unavailable; reload to try again."
+        : null,
+      activeLabelDrafts: activeLabelDraftsResult.error
+        ? "Private label drafts could not be loaded. Their current state is unavailable; reload before discarding a draft."
+        : null,
+    },
   };
 
   return <SettingsView initialData={initialData} />;

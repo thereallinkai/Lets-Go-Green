@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   ChevronLeft,
@@ -16,17 +16,21 @@ import {
   clientApiError,
 } from "@/src/lib/client-api-error";
 import {
+  addLocalDays,
+  addLocalMonths,
+  localDateInTimeZone,
+  localMonthBounds,
+} from "@/src/lib/domain/dates";
+import {
   MEAL_SLOT_LABELS,
   MEAL_SLOTS,
   SNACK_MEAL_TYPES,
-  addLocalDays,
-  localDateInTimeZone,
   normalizeMealSlotCheckins,
-  summarizeMealCheckins,
   type MealCheckinStatus,
   type MealSlot,
   type MealSlotCheckin,
-} from "@/src/lib/domain";
+} from "@/src/lib/domain/meal-slots";
+import { summarizeMealCheckins } from "@/src/lib/domain/completion";
 
 export type CalendarCheckin = {
   localDate: string;
@@ -37,29 +41,15 @@ export type CalendarCheckin = {
 type LastChange =
   | {
       kind: "meal";
+      localDate: string;
       mealType: MealSlot;
       previous: MealSlotCheckin;
     }
   | {
       kind: "note";
+      localDate: string;
       previous: string;
     };
-
-function monthBounds(month: string) {
-  const [year, monthNumber] = month.split("-").map(Number);
-  const first = `${year}-${String(monthNumber).padStart(2, "0")}-01`;
-  const lastDay = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
-  return {
-    first,
-    last: `${year}-${String(monthNumber).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`,
-  };
-}
-
-function shiftMonth(month: string, amount: number) {
-  const [year, monthNumber] = month.split("-").map(Number);
-  const date = new Date(Date.UTC(year, monthNumber - 1 + amount, 1));
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
-}
 
 function monthLabel(month: string) {
   return new Intl.DateTimeFormat("en-US", {
@@ -143,22 +133,39 @@ export function CalendarView({
   const [announcement, setAnnouncement] = useState("");
   const [operationError, setOperationError] = useState<ApiError | null>(null);
   const [saving, setSaving] = useState(false);
+  const [loadingMonth, setLoadingMonth] = useState(false);
   const [lastChange, setLastChange] = useState<LastChange | null>(null);
   const [skipEditor, setSkipEditor] = useState<MealSlot | null>(null);
   const [skipReason, setSkipReason] = useState("");
+  const selectedDateRef = useRef(initialSelectedDate);
+  const monthRequestRef = useRef<{
+    controller: AbortController;
+    sequence: number;
+  } | null>(null);
+  const monthRequestSequenceRef = useRef(0);
   const today = localDateInTimeZone(new Date(), timeZone);
 
-  function replaceSelected(
+  useEffect(
+    () => () => {
+      monthRequestSequenceRef.current += 1;
+      monthRequestRef.current?.controller.abort();
+      monthRequestRef.current = null;
+    },
+    [],
+  );
+
+  function replaceCheckin(
+    localDate: string,
     updater: (checkin: CalendarCheckin) => CalendarCheckin,
   ) {
     setCheckins((current) => {
       const existing = current.find(
-        (checkin) => checkin.localDate === selectedDate,
+        (checkin) => checkin.localDate === localDate,
       );
-      const next = updater(existing ?? emptyCheckin(selectedDate));
+      const next = updater(existing ?? emptyCheckin(localDate));
       return [
         ...current.filter(
-          (checkin) => checkin.localDate !== selectedDate,
+          (checkin) => checkin.localDate !== localDate,
         ),
         next,
       ];
@@ -166,7 +173,7 @@ export function CalendarView({
   }
 
   const calendarDays = useMemo(() => {
-    const bounds = monthBounds(month);
+    const bounds = localMonthBounds(month);
     const firstWeekday = new Date(`${bounds.first}T12:00:00Z`).getUTCDay();
     const gridStart = addLocalDays(bounds.first, -firstWeekday);
     return Array.from({ length: 42 }, (_, index) => {
@@ -190,19 +197,28 @@ export function CalendarView({
   }, [checkins, month]);
 
   async function loadMonth(nextMonth: string, selectDate?: string) {
+    if (saving) return;
     const fallback = clientApiError(
       "CHECKINS_LOAD_UNAVAILABLE",
       "The requested month could not be loaded.",
       "The current month remains visible. Check the connection and try again.",
       { retryable: true, action: { kind: "retry", label: "Try loading again" } },
     );
+    const sequence = monthRequestSequenceRef.current + 1;
+    monthRequestSequenceRef.current = sequence;
+    monthRequestRef.current?.controller.abort();
+    const controller = new AbortController();
+    monthRequestRef.current = { controller, sequence };
     setOperationError(null);
-    const { first, last } = monthBounds(nextMonth);
+    setLoadingMonth(true);
+    const { first, last } = localMonthBounds(nextMonth);
     setAnnouncement(`Loading ${monthLabel(nextMonth)}…`);
     try {
       const response = await fetch(
         `/api/checkins?from=${encodeURIComponent(first)}&to=${encodeURIComponent(last)}`,
+        { signal: controller.signal },
       );
+      if (sequence !== monthRequestSequenceRef.current) return;
       if (!response.ok) {
         throw await apiErrorFromResponse(response, fallback);
       }
@@ -210,32 +226,57 @@ export function CalendarView({
         data: CalendarCheckin[] | null;
       };
       const nextCheckins = (result.data ?? []).map(normalizeCheckin);
+      if (sequence !== monthRequestSequenceRef.current) return;
       setMonth(nextMonth);
       setCheckins(nextCheckins);
       const nextSelected = selectDate ?? first;
+      selectedDateRef.current = nextSelected;
       setSelectedDate(nextSelected);
       const nextCheckin = nextCheckins.find(
         (checkin) => checkin.localDate === nextSelected,
       );
       setNotes(nextCheckin?.notes ?? "");
       setLastChange(null);
+      setSkipEditor(null);
+      setSkipReason("");
       setAnnouncement(`${monthLabel(nextMonth)} is ready.`);
     } catch (error) {
+      if (sequence !== monthRequestSequenceRef.current) return;
       const publicError = apiErrorFromThrown(error, fallback);
       setOperationError(publicError);
       setAnnouncement(`${publicError.message} Error code: ${publicError.code}.`);
+    } finally {
+      if (sequence === monthRequestSequenceRef.current) {
+        setLoadingMonth(false);
+        if (monthRequestRef.current?.sequence === sequence) {
+          monthRequestRef.current = null;
+        }
+      }
     }
   }
 
+  function cancelMonthLoad() {
+    if (!monthRequestRef.current) return;
+    monthRequestSequenceRef.current += 1;
+    monthRequestRef.current.controller.abort();
+    monthRequestRef.current = null;
+    setLoadingMonth(false);
+  }
+
   function selectDay(localDate: string) {
+    if (saving) return;
+    cancelMonthLoad();
     const checkin = checkins.find((item) => item.localDate === localDate);
+    selectedDateRef.current = localDate;
     setSelectedDate(localDate);
     setNotes(checkin?.notes ?? "");
     setLastChange(null);
     setSkipEditor(null);
+    setSkipReason("");
   }
 
   async function persistMeal(
+    localDate: string,
     mealType: MealSlot,
     status: MealCheckinStatus,
     reason: string | null,
@@ -246,7 +287,7 @@ export function CalendarView({
       "The previous status remains. Check the connection and try again.",
       { retryable: true, action: { kind: "retry", label: "Try again" } },
     );
-    const response = await fetch(`/api/checkins/${selectedDate}`, {
+    const response = await fetch(`/api/checkins/${localDate}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -262,12 +303,16 @@ export function CalendarView({
   }
 
   async function setMeal(
+    localDate: string,
     mealType: MealSlot,
     status: MealCheckinStatus,
     reason: string | null = null,
   ) {
-    if (saving || selectedDate > today) return;
-    const previous = selectedCheckin.slots.find(
+    if (saving || loadingMonth || localDate > today) return;
+    const checkin =
+      checkins.find((item) => item.localDate === localDate) ??
+      emptyCheckin(localDate);
+    const previous = checkin.slots.find(
       (slot) => slot.mealType === mealType,
     )!;
     const next = {
@@ -275,7 +320,7 @@ export function CalendarView({
       status,
       skipReason: status === "skipped" ? reason : null,
     } satisfies MealSlotCheckin;
-    replaceSelected((checkin) => ({
+    replaceCheckin(localDate, (checkin) => ({
       ...checkin,
       slots: checkin.slots.map((slot) =>
         slot.mealType === mealType ? next : slot,
@@ -284,8 +329,8 @@ export function CalendarView({
     setSaving(true);
     setOperationError(null);
     try {
-      await persistMeal(mealType, status, reason);
-      setLastChange({ kind: "meal", mealType, previous });
+      await persistMeal(localDate, mealType, status, reason);
+      setLastChange({ kind: "meal", localDate, mealType, previous });
       setSkipEditor(null);
       setSkipReason("");
       setAnnouncement(
@@ -301,7 +346,7 @@ export function CalendarView({
           { retryable: true, action: { kind: "retry", label: "Try again" } },
         ),
       );
-      replaceSelected((checkin) => ({
+      replaceCheckin(localDate, (checkin) => ({
         ...checkin,
         slots: checkin.slots.map((slot) =>
           slot.mealType === mealType ? previous : slot,
@@ -314,9 +359,10 @@ export function CalendarView({
     }
   }
 
-  async function saveNotes() {
-    if (saving || selectedDate > today) return;
-    const previous = selectedCheckin.notes ?? "";
+  async function saveNotes(localDate: string, nextNotes: string) {
+    if (saving || loadingMonth || localDate > today) return;
+    const previous =
+      checkins.find((checkin) => checkin.localDate === localDate)?.notes ?? "";
     const fallback = clientApiError(
       "CHECKIN_NOTE_SAVE_UNAVAILABLE",
       "The note could not be saved.",
@@ -326,23 +372,23 @@ export function CalendarView({
     setOperationError(null);
     setSaving(true);
     try {
-      const response = await fetch(`/api/checkins/${selectedDate}`, {
+      const response = await fetch(`/api/checkins/${localDate}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ kind: "note", notes: notes || null }),
+        body: JSON.stringify({ kind: "note", notes: nextNotes || null }),
       });
       if (!response.ok) {
         throw await apiErrorFromResponse(response, fallback);
       }
-      replaceSelected((checkin) => ({
+      replaceCheckin(localDate, (checkin) => ({
         ...checkin,
-        notes: notes || null,
+        notes: nextNotes || null,
       }));
-      setLastChange({ kind: "note", previous });
+      setLastChange({ kind: "note", localDate, previous });
       setAnnouncement("The note was saved.");
     } catch (error) {
       const publicError = apiErrorFromThrown(error, fallback);
-      setNotes(previous);
+      if (selectedDateRef.current === localDate) setNotes(previous);
       setOperationError(publicError);
       setAnnouncement(`${publicError.message} Error code: ${publicError.code}.`);
     } finally {
@@ -351,7 +397,7 @@ export function CalendarView({
   }
 
   async function undo() {
-    if (!lastChange || saving) return;
+    if (!lastChange || saving || loadingMonth) return;
     const fallback = clientApiError(
       "CHECKIN_UNDO_UNAVAILABLE",
       "Undo could not be saved.",
@@ -363,11 +409,12 @@ export function CalendarView({
     try {
       if (lastChange.kind === "meal") {
         await persistMeal(
+          lastChange.localDate,
           lastChange.mealType,
           lastChange.previous.status,
           lastChange.previous.skipReason,
         );
-        replaceSelected((checkin) => ({
+        replaceCheckin(lastChange.localDate, (checkin) => ({
           ...checkin,
           slots: checkin.slots.map((slot) =>
             slot.mealType === lastChange.mealType
@@ -376,7 +423,7 @@ export function CalendarView({
           ),
         }));
       } else {
-        const response = await fetch(`/api/checkins/${selectedDate}`, {
+        const response = await fetch(`/api/checkins/${lastChange.localDate}`, {
           method: "PATCH",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
@@ -387,8 +434,10 @@ export function CalendarView({
         if (!response.ok) {
           throw await apiErrorFromResponse(response, fallback);
         }
-        setNotes(lastChange.previous);
-        replaceSelected((checkin) => ({
+        if (selectedDateRef.current === lastChange.localDate) {
+          setNotes(lastChange.previous);
+        }
+        replaceCheckin(lastChange.localDate, (checkin) => ({
           ...checkin,
           notes: lastChange.previous || null,
         }));
@@ -425,7 +474,7 @@ export function CalendarView({
           <h1>Calendar</h1>
           <p>Review meal and optional snack check-ins by local calendar date.</p>
         </div>
-        <button className="button button-quiet" type="button" onClick={() => {
+        <button className="button button-quiet" disabled={saving} type="button" onClick={() => {
           const currentMonth = today.slice(0, 7);
           if (currentMonth === month) selectDay(today);
           else void loadMonth(currentMonth, today);
@@ -442,9 +491,9 @@ export function CalendarView({
       <div className="calendar-layout">
         <section className="card calendar-card" aria-label={`${monthLabel(month)} calendar`}>
           <div className="calendar-toolbar">
-            <button className="icon-button" aria-label="Previous month" type="button" onClick={() => void loadMonth(shiftMonth(month, -1))}><ChevronLeft size={19} /></button>
+            <button className="icon-button" aria-label="Previous month" disabled={saving} type="button" onClick={() => void loadMonth(addLocalMonths(month, -1))}><ChevronLeft size={19} /></button>
             <h2>{monthLabel(month)}</h2>
-            <button className="icon-button" aria-label="Next month" type="button" onClick={() => void loadMonth(shiftMonth(month, 1))}><ChevronRight size={19} /></button>
+            <button className="icon-button" aria-label="Next month" disabled={saving} type="button" onClick={() => void loadMonth(addLocalMonths(month, 1))}><ChevronRight size={19} /></button>
           </div>
           <div className="calendar-grid">
             {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => (
@@ -457,7 +506,7 @@ export function CalendarView({
                 type="button"
                 aria-label={`${fullDateLabel(item.localDate)}, ${item.marked} of 3 planned meals marked${item.snacks ? `, ${item.snacks} snacks recorded` : ""}`}
                 aria-pressed={selectedDate === item.localDate}
-                disabled={item.outside}
+                disabled={item.outside || saving}
                 onClick={() => selectDay(item.localDate)}
               >
                 <span className="day-number">{item.label}</span>
@@ -487,10 +536,11 @@ export function CalendarView({
                     <button
                       className={`check-button ${slot.status === "completed" ? "complete" : ""}`}
                       type="button"
-                      disabled={saving || selectedDate > today}
+                      disabled={saving || loadingMonth || selectedDate > today}
                       aria-pressed={slot.status === "completed"}
                       onClick={() =>
                         void setMeal(
+                          selectedDate,
                           slot.mealType,
                           slot.status === "completed"
                             ? "not_marked"
@@ -503,10 +553,10 @@ export function CalendarView({
                     </button>
                     <button
                       className="button button-quiet"
-                      disabled={saving || selectedDate > today}
+                      disabled={saving || loadingMonth || selectedDate > today}
                       onClick={() => {
                         if (slot.status === "skipped") {
-                          void setMeal(slot.mealType, "not_marked");
+                          void setMeal(selectedDate, slot.mealType, "not_marked");
                         } else {
                           setSkipEditor(slot.mealType);
                           setSkipReason("");
@@ -539,8 +589,8 @@ export function CalendarView({
                     <div className="header-actions">
                       <button
                         className="button button-dark"
-                        disabled={saving}
-                        onClick={() => void setMeal(slot.mealType, "skipped", skipReason.trim() || null)}
+                        disabled={saving || loadingMonth}
+                        onClick={() => void setMeal(selectedDate, slot.mealType, "skipped", skipReason.trim() || null)}
                         type="button"
                       >
                         Save skipped status
@@ -556,12 +606,12 @@ export function CalendarView({
           </div>
           <label className="field" style={{ marginTop: "1rem" }}>
             <span className="field-label">Optional note</span>
-            <textarea maxLength={2000} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Add context for your future self…" />
+            <textarea disabled={saving || loadingMonth} maxLength={2000} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Add context for your future self…" />
           </label>
-          <button className="button button-dark form-submit" disabled={saving || selectedDate > today} type="button" onClick={saveNotes}>
+          <button className="button button-dark form-submit" disabled={saving || loadingMonth || selectedDate > today} type="button" onClick={() => void saveNotes(selectedDate, notes)}>
             Save note
           </button>
-          <button className="button button-quiet form-submit" disabled={!lastChange || saving} type="button" onClick={undo}>
+          <button className="button button-quiet form-submit" disabled={!lastChange || saving || loadingMonth} type="button" onClick={undo}>
             <Undo2 size={16} /> Undo last saved change
           </button>
           {selectedDate > today ? <p className="field-help">Future meal completion is disabled.</p> : null}

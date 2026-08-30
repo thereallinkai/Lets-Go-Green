@@ -6,17 +6,17 @@ import {
   type NutritionRecord,
 } from "./nutrition";
 
-export type NutritionRange = {
+type NutritionRange = {
   minimum: number;
   maximum: number;
 };
 
-export type PlanNutritionRanges = {
+type PlanNutritionRanges = {
   energyKcal: NutritionRange | null;
   proteinGrams: NutritionRange | null;
 };
 
-export type PlanNutritionIssue = {
+type PlanNutritionIssue = {
   dayIndex: number;
   code:
     | "nutrition_record"
@@ -25,7 +25,7 @@ export type PlanNutritionIssue = {
   message: string;
 };
 
-export type PlanNutritionValidation = {
+type PlanNutritionValidation = {
   valid: boolean;
   days: Array<{
     dayIndex: number;

@@ -18,12 +18,9 @@
   --danger: #9b3d35;
   --shadow-sm: 0 8px 24px rgba(18, 74, 44, 0.07);
   --shadow: 0 20px 58px rgba(18, 74, 44, 0.11);
-  --shadow-raised: 0 24px 68px rgba(18, 74, 44, 0.16);
   --radius-lg: 24px;
   --radius-md: 16px;
-  --radius-sm: 10px;
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
-  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
   --motion-fast: 140ms;
   --motion-base: 200ms;
@@ -74,8 +71,7 @@ button,
 [role="button"],
 a[href],
 summary,
-.option-card,
-.category-badge:has(input) {
+.option-card {
   touch-action: manipulation;
 }
 
@@ -251,10 +247,6 @@ img {
   box-shadow: 0 8px 22px rgba(23, 37, 35, 0.2);
 }
 
-.ui-button-default {
-  color: white;
-}
-
 .button-accent {
   background: var(--accent);
   color: var(--ink);
@@ -392,8 +384,7 @@ img {
   font-size: 0.64rem;
 }
 
-.status-chip,
-.badge {
+.status-chip {
   display: inline-flex;
   min-height: 30px;
   align-items: center;
@@ -920,8 +911,7 @@ img {
 
 .field input,
 .field select,
-.field textarea,
-.input {
+.field textarea {
   width: 100%;
   min-height: 48px;
   border: 1px solid var(--line);
@@ -1484,10 +1474,6 @@ details.message-box[open] > summary {
     transform var(--motion-base) var(--ease-out);
 }
 
-.ui-card {
-  border-color: var(--line);
-}
-
 .card-title {
   display: flex;
   align-items: flex-start;
@@ -1749,7 +1735,7 @@ details.message-box[open] > summary {
 
 .check-button {
   min-width: 104px;
-  min-height: 44px;
+  min-height: 45px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3213,58 +3199,6 @@ details.message-box[open] > summary {
   grid-template-columns: minmax(0, 1.55fr) minmax(260px, 0.65fr);
 }
 
-.food-results {
-  align-self: start;
-  display: grid;
-  gap: 0.6rem;
-  max-height: 540px;
-  overflow-y: auto;
-}
-
-.food-result {
-  display: grid;
-  gap: 0.7rem;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: white;
-  padding: 0.8rem;
-}
-
-.food-result h3 {
-  margin: 0;
-  font-size: 0.86rem;
-}
-
-.category-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
-}
-
-.category-badge {
-  border-radius: 999px;
-  background: #eff1e9;
-  padding: 0.15rem 0.45rem;
-  color: #5e6966;
-  font-size: 0.63rem;
-}
-
-.food-actions {
-  display: grid;
-  gap: 0.35rem;
-  grid-template-columns: repeat(3, 1fr);
-}
-
-.food-actions button {
-  min-height: 44px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #faf9f5;
-  cursor: pointer;
-  font-size: 0.66rem;
-  font-weight: 750;
-}
-
 .meal-destinations {
   display: grid;
   gap: 0.7rem;
@@ -3415,7 +3349,6 @@ details.message-box[open] > summary {
   .history-list,
   .day-meal-list,
   .snack-food-results,
-  .food-results,
   .meal-destinations,
   .meal-preview-grid,
   .benefit-grid,
@@ -3480,8 +3413,6 @@ summary {
 }
 
 .option-card,
-.category-badge:has(input),
-.food-actions button,
 .selected-food button {
   transform-origin: center;
   transition:
@@ -3514,7 +3445,6 @@ summary {
 :is(
   .brand,
   .button,
-  .ui-button,
   .icon-button,
   .text-link,
   .nav-link,
@@ -3525,7 +3455,6 @@ summary {
   .calendar-day,
   .shopping-links a,
   .settings-index a,
-  .food-actions button,
   .selected-food button,
   summary
 ) {
@@ -3548,25 +3477,21 @@ summary {
   transform-origin: left center;
 }
 
-.option-card:has(input:focus-visible),
-.category-badge:has(input:focus-visible) {
+.option-card:has(input:focus-visible) {
   outline: 3px solid #2f7d4e;
   outline-offset: 3px;
 }
 
 button:disabled,
 [aria-disabled="true"],
-.option-card:has(input:disabled),
-.category-badge:has(input:disabled) {
+.option-card:has(input:disabled) {
   cursor: not-allowed;
 }
 
 .icon-button:disabled,
 .text-link:disabled,
-.food-actions button:disabled,
 .selected-food button:disabled,
-.option-card:has(input:disabled),
-.category-badge:has(input:disabled) {
+.option-card:has(input:disabled) {
   opacity: 0.55;
   transform: none;
 }
@@ -3576,8 +3501,7 @@ button:disabled,
     transform: translateY(-1px) scale(1.008);
   }
 
-  .button:hover:not(:disabled),
-  .ui-button:hover:not(:disabled) {
+  .button:hover:not(:disabled) {
     transform: translateY(-2px) scale(1.018);
   }
 
@@ -3615,24 +3539,11 @@ button:disabled,
     transform: translateX(3px) scale(1.008);
   }
 
-  .food-actions button:hover:not(:disabled) {
-    border-color: #8fb69a;
-    background: white;
-    box-shadow: 0 7px 18px rgba(18, 74, 44, 0.1);
-    transform: translateY(-1px) scale(1.025);
-  }
-
   .option-card:hover:not(:has(input:disabled)) {
     border-color: #8fb69a;
     background: #fdfefb;
     box-shadow: 0 9px 24px rgba(18, 74, 44, 0.09);
     transform: translateY(-1px) scale(1.012);
-  }
-
-  .category-badge:has(input):hover:not(:has(input:disabled)) {
-    background: #e3f1df;
-    box-shadow: 0 5px 14px rgba(18, 74, 44, 0.09);
-    transform: scale(1.025);
   }
 
   :is(
@@ -3671,7 +3582,6 @@ button:disabled,
 :is(
   .brand,
   .button,
-  .ui-button,
   .icon-button,
   .text-link,
   .nav-link,
@@ -3682,7 +3592,6 @@ button:disabled,
   .calendar-day,
   .shopping-links a,
   .settings-index a,
-  .food-actions button,
   .selected-food button,
   summary
 ):active:not(:disabled):not([aria-disabled="true"]) {
@@ -3706,8 +3615,7 @@ button:disabled,
   transform: none;
 }
 
-.option-card:active:not(:has(input:disabled)),
-.category-badge:has(input):active:not(:has(input:disabled)) {
+.option-card:active:not(:has(input:disabled)) {
   box-shadow: 0 0 0 4px var(--interaction-ring);
   transform: none;
 }
@@ -3716,7 +3624,6 @@ button:disabled,
   :is(
     .brand,
     .button,
-    .ui-button,
     .icon-button,
     .text-link,
     .nav-link,
@@ -3727,7 +3634,6 @@ button:disabled,
     .calendar-day,
     .shopping-links a,
     .settings-index a,
-    .food-actions button,
     .selected-food button,
     summary
   ):active:not(:disabled):not([aria-disabled="true"]) {
@@ -3745,8 +3651,7 @@ button:disabled,
     transform: scale(1.025);
   }
 
-  .option-card:active:not(:has(input:disabled)),
-  .category-badge:has(input):active:not(:has(input:disabled)) {
+  .option-card:active:not(:has(input:disabled)) {
     transform: scale(1.02);
   }
 }
@@ -4407,7 +4312,6 @@ button:disabled,
 @media (hover: none), (pointer: coarse) {
   .brand:hover,
   .button:hover:not(:active),
-  .ui-button:hover:not(:active),
   .icon-button:hover:not(:active),
   .text-link:hover:not(:active),
   .brand:hover .brand-mark,
@@ -4423,10 +4327,8 @@ button:disabled,
   .summary-stat:hover,
   .shopping-links a:hover:not(:active),
   .settings-index a:hover:not(:active),
-  .food-actions button:hover:not(:active),
   .selected-food button:hover:not(:active),
   .option-card:hover:not(:active),
-  .category-badge:has(input):hover:not(:active),
   summary:hover:not(:active) {
     transform: none;
   }
@@ -4458,7 +4360,6 @@ button:disabled,
   :is(
     .brand,
     .button,
-    .ui-button,
     .icon-button,
     .text-link,
     .nav-link,
@@ -4469,10 +4370,8 @@ button:disabled,
     .calendar-day,
     .shopping-links a,
     .settings-index a,
-    .food-actions button,
     .selected-food button,
     .option-card,
-    .category-badge:has(input),
     summary
   ):is(:hover, :active) {
     transform: none !important;
@@ -4522,7 +4421,6 @@ html[data-theme="dark"] {
   --danger: #ffaaa2;
   --shadow-sm: 0 8px 24px rgba(0, 0, 0, 0.28);
   --shadow: 0 20px 58px rgba(0, 0, 0, 0.34);
-  --shadow-raised: 0 24px 68px rgba(0, 0, 0, 0.44);
   --interaction-ring: rgba(184, 227, 109, 0.34);
 }
 
@@ -4628,7 +4526,7 @@ html[data-theme="dark"] :is(
   color: #aebfb3;
 }
 
-html[data-theme="dark"] :is(.status-chip, .badge) {
+html[data-theme="dark"] .status-chip {
   background: #213a28;
   color: #dcedd9;
 }
@@ -4645,26 +4543,9 @@ html[data-theme="dark"] :is(.product-preview, .card, .meal-row, .plan-meal-card)
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
 }
 
-html[data-theme="dark"] :is(.button-dark, .ui-button-default, .ui-button-accent) {
+html[data-theme="dark"] .button-dark {
   background: var(--accent);
   color: #102619;
-}
-
-html[data-theme="dark"] .ui-button-outline {
-  border-color: #577060;
-  background: rgba(20, 37, 26, 0.7);
-  color: #eff7f0;
-}
-
-html[data-theme="dark"] .ui-button-outline:hover {
-  border-color: #8eb297;
-  background: #1a3020;
-}
-
-html[data-theme="dark"] .ui-button-danger {
-  border-color: rgba(255, 170, 162, 0.42);
-  background: #321b1b;
-  color: #ffaaa2;
 }
 
 html[data-theme="dark"] .button-dark:hover {
@@ -4703,7 +4584,6 @@ html[data-theme="dark"] :is(
   .field input,
   .field select,
   .field textarea,
-  .input,
   .otp-grid input
 ) {
   border-color: var(--line);
@@ -4714,8 +4594,7 @@ html[data-theme="dark"] :is(
 html[data-theme="dark"] :is(
   .field input:focus,
   .field select:focus,
-  .field textarea:focus,
-  .input:focus
+  .field textarea:focus
 ) {
   border-color: #9fd067;
   background: #172b1e;

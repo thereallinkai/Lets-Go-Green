@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$ROOT_DIR"
 
 fail() {
@@ -71,6 +71,15 @@ export DATABASE_URL=""
 export AI_PROVIDER="mock"
 export ENABLE_REAL_AI="false"
 export OPENAI_API_KEY=""
+export LETS_GO_GREEN_NATIVE_PROJECT_ID="$(
+  node -e '
+    const { createHash } = require("node:crypto");
+    const { realpathSync } = require("node:fs");
+    process.stdout.write(
+      createHash("sha256").update(realpathSync(process.cwd())).digest("hex"),
+    );
+  '
+)"
 
 printf "Starting Let's Go Green! native demo at %s\n" "$APP_ORIGIN"
 printf 'No container or Docker daemon is used. Demo changes reset when the process restarts.\n'

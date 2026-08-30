@@ -1,12 +1,10 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useMemo, useRef, useState } from "react";
 import { Check, Pencil, X } from "lucide-react";
 import { ApiErrorNotice } from "@/components/api-error-notice";
-import {
-  FoodSearchPicker,
-  type FoodPickerItem,
-} from "@/components/food-search-picker";
+import type { FoodPickerItem } from "@/components/food-search-picker";
 import type { ApiError } from "@/src/lib/api-response";
 import {
   apiErrorFromPayload,
@@ -21,6 +19,20 @@ import {
   PRIMARY_MEAL_TYPES,
   type PrimaryMealType,
 } from "@/src/lib/domain/meal-slots";
+
+const FoodSearchPicker = dynamic(
+  () =>
+    import("@/components/food-search-picker").then(
+      (module) => module.FoodSearchPicker,
+    ),
+  {
+    loading: () => (
+      <div className="message-box" role="status">
+        Loading food search…
+      </div>
+    ),
+  },
+);
 
 type Meal = PrimaryMealType;
 

@@ -13,7 +13,7 @@
   },
   "homepage": "https://github.com/thereallinkai/Lets-Go-Green#readme",
   "engines": {
-    "node": ">=22.0.0 <23"
+    "node": "22.23.1"
   },
   "packageManager": "npm@10.9.8",
   "scripts": {
@@ -22,6 +22,7 @@
     "ocr:assets:check": "node scripts/prepare-ocr-assets.mjs --check",
     "doctor": "./scripts/doctor",
     "doctor:native": "./scripts/doctor-native",
+    "launcher:install": "./scripts/install-local-launcher",
     "bootstrap": "./scripts/bootstrap",
     "services:start": "./scripts/services-start",
     "db:sync": "./scripts/sync-local-database",
@@ -52,13 +53,9 @@
     "@dnd-kit/sortable": "10.0.0",
     "@dnd-kit/utilities": "3.2.2",
     "@radix-ui/react-dialog": "1.1.23",
-    "@radix-ui/react-slot": "1.3.3",
     "@supabase/ssr": "0.12.3",
     "@supabase/supabase-js": "2.110.8",
     "@tesseract.js-data/eng": "1.0.0",
-    "class-variance-authority": "0.7.1",
-    "clsx": "2.1.1",
-    "date-fns": "4.4.0",
     "lucide-react": "1.26.0",
     "next": "16.2.11",
     "openai": "6.49.0",
@@ -67,7 +64,6 @@
     "recharts": "3.10.0",
     "server-only": "0.0.1",
     "sharp": "0.35.3",
-    "tailwind-merge": "3.6.0",
     "tesseract.js": "7.0.0",
     "tesseract.js-core": "7.0.0",
     "zod": "4.4.3"
@@ -98,12 +94,8 @@
   },
   "overrides": {
     "brace-expansion": "5.0.9",
-    "next": "16.2.11",
-    "fast-uri": "4.1.2",
-    "js-yaml": "5.2.2",
     "nanoid": "3.3.18",
     "postcss": "8.5.23",
-    "react-server-dom-webpack": "19.2.8",
     "sharp": "0.35.3",
     "ws": "8.21.1"
   }

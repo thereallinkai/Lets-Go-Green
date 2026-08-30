@@ -1,19 +1,26 @@
-import type { GoalType } from "./goals";
+import {
+  assessGoalDirectionConsistency,
+  assessGoalTimeline,
+  type GoalAssessment,
+  type GoalDirectionConsistency,
+  type GoalType,
+} from "./goals";
 import {
   evaluateSafetyContext,
   type ConcerningSymptom,
+  type SafetyAssessment,
 } from "./safety";
 
 export const NUTRITION_ESTIMATOR_VERSION = "wellness-estimator-v1.0.0";
 
-export type ActivityLevel =
+type ActivityLevel =
   | "sedentary"
   | "light"
   | "moderate"
   | "very_active";
-export type SexForEstimate = "female" | "male" | "unspecified";
+type SexForEstimate = "female" | "male" | "unspecified";
 
-export interface EstimateRange {
+interface EstimateRange {
   minimum: number;
   maximum: number;
   unit: "kcal/day" | "g/day";
@@ -49,6 +56,26 @@ export interface NutritionEstimate {
   };
 }
 
+export interface GoalAwareNutritionAssessmentInput {
+  currentWeightKg?: number | null;
+  startingWeightKg?: number | null;
+  targetWeightKg?: number | null;
+  planStartDate?: string | null;
+  targetDate?: string | null;
+  goalType: GoalType;
+  heightCm?: number | null;
+  ageYears?: number | null;
+  gender?: string | null;
+  profileActivityLevel?: string | null;
+  relevantMedicalConcerns?: boolean | null;
+}
+
+export interface GoalAwareNutritionAssessment {
+  goalTimeline: GoalAssessment | null;
+  safety: SafetyAssessment;
+  estimate: NutritionEstimate;
+}
+
 const ACTIVITY_MULTIPLIERS: Readonly<
   Record<ActivityLevel, readonly [number, number]>
 > = {
@@ -80,6 +107,30 @@ function validPositive(value: number | null | undefined): value is number {
   return value !== null && value !== undefined && Number.isFinite(value) && value > 0;
 }
 
+function normalizeActivityLevel(
+  value: string | null | undefined,
+): ActivityLevel | null {
+  switch (value) {
+    case "sedentary":
+      return "sedentary";
+    case "lightly_active":
+      return "light";
+    case "moderately_active":
+      return "moderate";
+    case "very_active":
+    case "extremely_active":
+      return "very_active";
+    default:
+      return null;
+  }
+}
+
+function normalizeSexForEstimate(
+  gender: string | null | undefined,
+): SexForEstimate {
+  return gender === "male" || gender === "female" ? gender : "unspecified";
+}
+
 function roundedRange(
   minimum: number,
   maximum: number,
@@ -94,8 +145,9 @@ function roundedRange(
   };
 }
 
-export function calculateNutritionEstimate(
+function calculateNutritionEstimateWithSafety(
   input: NutritionEstimateInput,
+  safety: SafetyAssessment,
 ): NutritionEstimate {
   const missingInputs: string[] = [];
   const assumptions: string[] = [
@@ -128,13 +180,6 @@ export function calculateNutritionEstimate(
     }
   }
 
-  const safety = evaluateSafetyContext({
-    ageYears: input.ageYears,
-    pregnantOrNursing: input.pregnantOrNursing,
-    eatingDisorderHistory: input.eatingDisorderHistory,
-    relevantMedicalConcerns: input.relevantMedicalConcerns,
-    symptoms: input.symptoms,
-  });
   const canCalculateCalories =
     validPositive(input.weightKg) &&
     validPositive(input.heightCm) &&
@@ -148,7 +193,6 @@ export function calculateNutritionEstimate(
   let goalRange: readonly [number, number] | null = null;
   if (canCalculateCalories) {
     activityRange = ACTIVITY_MULTIPLIERS[input.activityLevel!];
-    goalRange = GOAL_ENERGY_FACTORS[input.goalType];
     const base =
       10 * input.weightKg! + 6.25 * input.heightCm! - 5 * input.ageYears!;
     const sex = input.sexForEstimate ?? "unspecified";
@@ -166,6 +210,7 @@ export function calculateNutritionEstimate(
       "kcal/day",
     );
     if (!safety.requiresNonRestrictivePlan) {
+      goalRange = GOAL_ENERGY_FACTORS[input.goalType];
       calorieRange = roundedRange(
         bmrMinimum * activityRange[0] * goalRange[0],
         bmrMaximum * activityRange[1] * goalRange[1],
@@ -203,4 +248,70 @@ export function calculateNutritionEstimate(
         : null,
     },
   };
+}
+
+export function calculateNutritionEstimate(
+  input: NutritionEstimateInput,
+): NutritionEstimate {
+  return calculateNutritionEstimateWithSafety(
+    input,
+    evaluateSafetyContext({
+      ageYears: input.ageYears,
+      pregnantOrNursing: input.pregnantOrNursing,
+      eatingDisorderHistory: input.eatingDisorderHistory,
+      relevantMedicalConcerns: input.relevantMedicalConcerns,
+      symptoms: input.symptoms,
+    }),
+  );
+}
+
+export function assessGoalAwareNutrition(
+  input: GoalAwareNutritionAssessmentInput,
+): GoalAwareNutritionAssessment {
+  const { startingWeightKg, targetWeightKg, planStartDate, targetDate } = input;
+  let goalDirection: GoalDirectionConsistency | null = null;
+  let goalTimeline: GoalAssessment | null = null;
+  if (validPositive(startingWeightKg) && validPositive(targetWeightKg)) {
+    goalDirection = assessGoalDirectionConsistency({
+      startingWeightKg,
+      targetWeightKg,
+      goalType: input.goalType,
+    });
+    if (
+      typeof planStartDate === "string" &&
+      planStartDate.length > 0 &&
+      typeof targetDate === "string" &&
+      targetDate.length > 0
+    ) {
+      goalTimeline = assessGoalTimeline({
+        startingWeightKg,
+        targetWeightKg,
+        goalType: input.goalType,
+        startDate: planStartDate,
+        targetDate,
+      });
+    }
+  }
+  const safety = evaluateSafetyContext({
+    ageYears: input.ageYears,
+    relevantMedicalConcerns: input.relevantMedicalConcerns,
+    goalDirectionConflict: goalDirection
+      ? !goalDirection.consistent
+      : false,
+    aggressiveGoalRate: goalTimeline?.unusuallyAggressive,
+  });
+  const estimate = calculateNutritionEstimateWithSafety(
+    {
+      weightKg: input.currentWeightKg,
+      heightCm: input.heightCm,
+      ageYears: input.ageYears,
+      sexForEstimate: normalizeSexForEstimate(input.gender),
+      activityLevel: normalizeActivityLevel(input.profileActivityLevel),
+      goalType: input.goalType,
+      relevantMedicalConcerns: input.relevantMedicalConcerns,
+    },
+    safety,
+  );
+
+  return { goalTimeline, safety, estimate };
 }

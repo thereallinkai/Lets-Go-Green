@@ -40,14 +40,14 @@ import {
   MEAL_SLOTS,
   SNACK_MEAL_TYPES,
   isPrimaryMealType,
-  localDateInTimeZone,
   normalizeMealSlotCheckins,
-  summarizeMealCheckins,
   type MealCheckinStatus,
   type MealSlot,
   type MealSlotCheckin,
   type PrimaryMealType,
-} from "@/src/lib/domain";
+} from "@/src/lib/domain/meal-slots";
+import { summarizeMealCheckins } from "@/src/lib/domain/completion";
+import { localDateInTimeZone } from "@/src/lib/domain/dates";
 import type {
   FoodNutritionFacts,
   FoodSourceSummary,

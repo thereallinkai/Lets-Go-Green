@@ -194,6 +194,20 @@ verify the native process with:
 npm run doctor:native
 ```
 
+On macOS, install the repository-supported one-click launcher once:
+
+```bash
+npm run launcher:install
+```
+
+The generated `Let's Go Green Local.app` stays inside the ignored
+`work/local-launcher` project folder, so machine-specific app-bundle files do
+not enter Git. Drag it to the Dock once. Each click resolves the project from
+the app's current location, opens the ready site, verifies that any process on
+port 3000 belongs to this checkout, and uses an operating-system file lock so
+simultaneous cold-start clicks cannot run duplicate installs or servers. Keep
+the launched Terminal window open while testing.
+
 The native doctor requires the health endpoint to report the isolated mock
 contract (`ready`, database `not_configured`, provider `mock`). It fails if a
 stale full-stack or real-provider process is already occupying the port. Both
@@ -397,6 +411,7 @@ check with remediation and exits nonzero if a required check fails.
 | --- | --- |
 | `npm run doctor` | Diagnose the complete running development environment. |
 | `npm run doctor:native` | Diagnose the no-container native app, OCR assets, and optional browser runner. |
+| `npm run launcher:install` | Build or refresh the portable one-click macOS Dock launcher inside `work/local-launcher`. |
 | `npm run bootstrap` | Idempotently install dependencies and prepare local services, configuration, types, browsers, and health checks. |
 | `npm run services:start` | Start or reuse Supabase and wait until it is healthy. |
 | `npm run db:sync` | Apply pending migrations and the idempotent catalog seed without resetting local data. |

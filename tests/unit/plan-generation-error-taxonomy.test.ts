@@ -22,6 +22,7 @@ describe("plan-generation public error taxonomy", () => {
   });
 
   it.each<PlanGenerationFailureCode>([
+    "GOAL_DIRECTION_CONFLICT",
     "PROFILE_DATA_LOAD_FAILED",
     "TRUSTED_PROFILE_INCOMPLETE",
     "INSUFFICIENT_ELIGIBLE_FOODS",

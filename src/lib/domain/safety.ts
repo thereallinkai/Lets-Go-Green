@@ -1,17 +1,16 @@
-export const CONCERNING_SYMPTOMS = [
-  "dizziness",
-  "fainting",
-  "heart_palpitations",
-  "severe_weakness",
-] as const;
-export type ConcerningSymptom = (typeof CONCERNING_SYMPTOMS)[number];
+export type ConcerningSymptom =
+  | "dizziness"
+  | "fainting"
+  | "heart_palpitations"
+  | "severe_weakness";
 
-export type SafetyFlagCode =
+type SafetyFlagCode =
   | "under_18"
   | "pregnant_or_nursing"
   | "eating_disorder_history"
   | "medical_concern"
   | "concerning_symptom"
+  | "goal_direction_conflict"
   | "aggressive_goal_rate";
 
 export interface SafetyContext {
@@ -20,8 +19,8 @@ export interface SafetyContext {
   eatingDisorderHistory?: boolean | null;
   relevantMedicalConcerns?: boolean | null;
   symptoms?: readonly ConcerningSymptom[];
-  startingWeightKg?: number | null;
-  impliedWeeklyChangeKg?: number | null;
+  goalDirectionConflict?: boolean | null;
+  aggressiveGoalRate?: boolean | null;
 }
 
 export interface SafetyAssessment {
@@ -60,20 +59,11 @@ export function evaluateSafetyContext(
   for (const symptom of [...new Set(context.symptoms ?? [])]) {
     flags.push({ code: "concerning_symptom", detail: symptom });
   }
-
-  if (
-    context.startingWeightKg &&
-    context.impliedWeeklyChangeKg &&
-    Number.isFinite(context.startingWeightKg) &&
-    Number.isFinite(context.impliedWeeklyChangeKg)
-  ) {
-    const weeklyFraction =
-      Math.abs(context.impliedWeeklyChangeKg) / context.startingWeightKg;
-    const aggressive =
-      context.impliedWeeklyChangeKg < 0
-        ? weeklyFraction > 0.01
-        : weeklyFraction > 0.005;
-    if (aggressive) flags.push({ code: "aggressive_goal_rate" });
+  if (context.goalDirectionConflict) {
+    flags.push({ code: "goal_direction_conflict" });
+  }
+  if (context.aggressiveGoalRate) {
+    flags.push({ code: "aggressive_goal_rate" });
   }
 
   return {

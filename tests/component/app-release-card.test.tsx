@@ -4,7 +4,9 @@ import { AppReleaseCard } from "@/components/app-release-card";
 
 describe("AppReleaseCard", () => {
   it("shows the testing channel and exact application version", () => {
-    render(<AppReleaseCard />);
+    render(
+      <AppReleaseCard channelLabel="Beta 6" displayVersion="v1.0.0-beta.6" />,
+    );
 
     expect(
       screen.getByRole("heading", { name: "About Let's Go Green!" }),

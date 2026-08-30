@@ -3,6 +3,7 @@ import {
   classifyAuthError,
   duplicateSignupResult,
   isAuthSessionMissing,
+  isIdentityConcealingAuthError,
 } from "../../src/lib/auth-error-taxonomy";
 
 describe("authentication public error taxonomy", () => {
@@ -88,6 +89,19 @@ describe("authentication public error taxonomy", () => {
       expect(error.code).toBe("INVALID_CREDENTIALS");
     }
     expect(JSON.stringify(errors)).not.toContain("private");
+  });
+
+  it("identifies provider errors that email actions must conceal", () => {
+    for (const code of [
+      "user_not_found",
+      "invalid_credentials",
+      "email_address_invalid",
+    ]) {
+      expect(isIdentityConcealingAuthError({ code })).toBe(true);
+    }
+    expect(isIdentityConcealingAuthError({ code: "service_unavailable" })).toBe(
+      false,
+    );
   });
 
   it("distinguishes retryable operational failures without exposing internals", () => {

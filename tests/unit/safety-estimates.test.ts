@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   NUTRITION_ESTIMATOR_VERSION,
+  assessGoalAwareNutrition,
   calculateNutritionEstimate,
 } from "../../src/lib/domain/estimates";
 import {
@@ -44,14 +45,92 @@ describe("safety flags", () => {
   it("flags an unusually aggressive implied weekly rate", () => {
     expect(
       evaluateSafetyContext({
-        startingWeightKg: 80,
-        impliedWeeklyChangeKg: -1,
+        aggressiveGoalRate: true,
       }).flags,
     ).toContainEqual({ code: "aggressive_goal_rate" });
   });
 });
 
 describe("versioned deterministic nutrition estimates", () => {
+  it("withholds goal-adjusted calories for an aggressive stored timeline", () => {
+    const result = assessGoalAwareNutrition({
+      currentWeightKg: 80,
+      startingWeightKg: 80,
+      targetWeightKg: 70,
+      planStartDate: "2026-01-01",
+      targetDate: "2026-02-01",
+      goalType: "fat_loss",
+      heightCm: 180,
+      ageYears: 30,
+      gender: "male",
+      profileActivityLevel: "moderately_active",
+    });
+
+    expect(result.safety.flags).toContainEqual({
+      code: "aggressive_goal_rate",
+    });
+    expect(result.safety.requiresNonRestrictivePlan).toBe(true);
+    expect(result.estimate.status).toBe("safety_limited");
+    expect(result.estimate.calorieRange).toBeNull();
+    expect(result.estimate.maintenanceCalorieRange).not.toBeNull();
+    expect(result.estimate.method.activityMultiplierRange).toEqual([1.45, 1.6]);
+    expect(result.estimate.method.goalEnergyFactorRange).toBeNull();
+    expect(result.goalTimeline?.unusuallyAggressive).toBe(true);
+  });
+
+  it.each([
+    ["fat_loss", 90],
+    ["muscle_gain", 70],
+    ["maintenance", 70],
+    ["maintenance", 90],
+  ] as const)(
+    "withholds goal-adjusted calories when %s conflicts with an 80 kg to %s kg target",
+    (goalType, targetWeightKg) => {
+      const result = assessGoalAwareNutrition({
+        currentWeightKg: 80,
+        startingWeightKg: 80,
+        targetWeightKg,
+        planStartDate: "2026-01-01",
+        targetDate: "2026-12-31",
+        goalType,
+        heightCm: 180,
+        ageYears: 30,
+        gender: "male",
+        profileActivityLevel: "moderately_active",
+      });
+
+      expect(result.goalTimeline?.conflictsWithGoalType).toBe(true);
+      expect(result.safety.flags).toContainEqual({
+        code: "goal_direction_conflict",
+      });
+      expect(result.estimate.status).toBe("safety_limited");
+      expect(result.estimate.calorieRange).toBeNull();
+      expect(result.estimate.maintenanceCalorieRange).not.toBeNull();
+      expect(result.estimate.method.goalEnergyFactorRange).toBeNull();
+    },
+  );
+
+  it("allows body recomposition estimates in either weight direction", () => {
+    const result = assessGoalAwareNutrition({
+      currentWeightKg: 80,
+      startingWeightKg: 80,
+      targetWeightKg: 82,
+      planStartDate: "2026-01-01",
+      targetDate: "2026-12-31",
+      goalType: "body_recomposition",
+      heightCm: 180,
+      ageYears: 30,
+      gender: "male",
+      profileActivityLevel: "moderately_active",
+    });
+
+    expect(result.goalTimeline?.conflictsWithGoalType).toBe(false);
+    expect(result.safety.flags).not.toContainEqual({
+      code: "goal_direction_conflict",
+    });
+    expect(result.estimate.calorieRange).not.toBeNull();
+  });
+
   it("returns transparent calorie and protein ranges", () => {
     const result = calculateNutritionEstimate({
       weightKg: 80,

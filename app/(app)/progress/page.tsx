@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
-import { format, parseISO } from "date-fns";
 import {
   ProgressView,
   type ProgressEntry,
 } from "@/components/progress-view";
+import { PageLoadError } from "@/components/page-load-error";
+import { formatLocalDate } from "@/src/lib/domain";
 import { isDevelopmentDemo } from "@/src/lib/env";
 import {
   createSupabaseServerClient,
@@ -12,6 +13,17 @@ import {
 } from "@/src/lib/supabase/server";
 
 export const metadata: Metadata = { title: "Progress" };
+
+function progressLoadError() {
+  return (
+    <PageLoadError
+      title="Your progress could not be loaded."
+      message="Your profile, goal, or saved weight entries could not be loaded safely. Reload Progress before relying on or changing this information."
+      retryHref="/progress"
+      retryLabel="Reload Progress"
+    />
+  );
+}
 
 export default async function ProgressPage() {
   if (isDevelopmentDemo()) return <ProgressView />;
@@ -34,10 +46,13 @@ export default async function ProgressPage() {
       .eq("status", "active")
       .maybeSingle(),
   ]);
+  if (weights.error || profile.error || goal.error) {
+    return progressLoadError();
+  }
 
   const entries: ProgressEntry[] = (weights.data ?? []).map((entry) => ({
     id: entry.id,
-    date: format(parseISO(entry.local_date), "MMM d"),
+    date: formatLocalDate(entry.local_date, "month-day"),
     isoDate: entry.local_date,
     kg: entry.weight_kg,
     isBaseline: entry.is_onboarding_baseline,

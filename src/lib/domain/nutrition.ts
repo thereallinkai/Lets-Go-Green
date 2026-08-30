@@ -14,7 +14,7 @@ export type NutritionVerificationStatus =
   | "pending_verification"
   | "unavailable";
 
-export type NutrientKey =
+type NutrientKey =
   | "calories"
   | "proteinGrams"
   | "carbohydrateGrams"
@@ -45,7 +45,7 @@ export interface NutritionItem {
   measurementBasis: MeasurementBasis;
 }
 
-export type NutritionTotals = Record<NutrientKey, number | null>;
+type NutritionTotals = Record<NutrientKey, number | null>;
 
 export interface NutritionAggregation {
   totals: NutritionTotals;

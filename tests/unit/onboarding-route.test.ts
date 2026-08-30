@@ -255,6 +255,34 @@ describe("PUT onboarding route", () => {
     expect(routeState.rpc).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["fat_loss", "105"],
+    ["muscle_gain", "90"],
+    ["maintenance", "90"],
+    ["maintenance", "105"],
+  ])(
+    "rejects a %s goal that conflicts with target weight %s before persistence",
+    async (goalType, targetWeight) => {
+      const response = await PUT(
+        completionRequest({
+          currentWeight: "97",
+          goalType,
+          targetWeight,
+        }),
+      );
+      const result = await response.json();
+
+      expect(response.status).toBe(422);
+      expect(result.error).toMatchObject({
+        code: "GOAL_DIRECTION_CONFLICT",
+        retryable: false,
+        action: { href: "/onboarding?step=4" },
+      });
+      expect(result.error.message).not.toMatch(/diagnos|failure/i);
+      expect(routeState.rpc).not.toHaveBeenCalled();
+    },
+  );
+
   it("requires height before attempting final persistence", async () => {
     const response = await PUT(completionRequest({ height: "" }));
     const result = await response.json();

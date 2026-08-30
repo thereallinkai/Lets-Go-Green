@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { readPlanSnapshotWeight } from "../../src/lib/plan-snapshot";
+import {
+  readPlanSnapshotRange,
+  readPlanSnapshotWeight,
+} from "../../src/lib/plan-snapshot";
 
 describe("plan input snapshot weights", () => {
   it("reads the immutable start and target weights from a generated plan", () => {
@@ -25,5 +28,41 @@ describe("plan input snapshot weights", () => {
     [{ profile: { startWeightKg: Number.POSITIVE_INFINITY } }, "startWeightKg"],
   ] as const)("rejects an unsafe or legacy snapshot", (snapshot, key) => {
     expect(readPlanSnapshotWeight(snapshot, key)).toBeNull();
+  });
+});
+
+describe("plan input snapshot ranges", () => {
+  it("reads valid deterministic nutrition ranges", () => {
+    const snapshot = {
+      deterministicRanges: {
+        energyKcal: { minimum: 1_800, maximum: 2_100 },
+        proteinGrams: { minimum: 95, maximum: 130 },
+      },
+    };
+
+    expect(readPlanSnapshotRange(snapshot, "energyKcal")).toEqual({
+      minimum: 1_800,
+      maximum: 2_100,
+    });
+    expect(readPlanSnapshotRange(snapshot, "proteinGrams")).toEqual({
+      minimum: 95,
+      maximum: 130,
+    });
+  });
+
+  it.each([
+    {},
+    { deterministicRanges: null },
+    { deterministicRanges: { energyKcal: null } },
+    { deterministicRanges: { energyKcal: { minimum: -1, maximum: 2_100 } } },
+    { deterministicRanges: { energyKcal: { minimum: 2_100, maximum: 1_800 } } },
+    { deterministicRanges: { energyKcal: { minimum: "1800", maximum: 2_100 } } },
+    {
+      deterministicRanges: {
+        energyKcal: { minimum: 1_800, maximum: Number.POSITIVE_INFINITY },
+      },
+    },
+  ])("rejects an invalid or legacy range snapshot", (snapshot) => {
+    expect(readPlanSnapshotRange(snapshot, "energyKcal")).toBeNull();
   });
 });

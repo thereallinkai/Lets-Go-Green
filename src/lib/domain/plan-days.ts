@@ -1,6 +1,5 @@
 import {
   daysBetweenLocalDates,
-  localDateInTimeZone,
   parseLocalDate,
 } from "./dates";
 
@@ -31,17 +30,4 @@ export function resolvePlanDay(
     dayIndex: ((offset % 7) + 1) as ResolvedPlanDay["dayIndex"],
     cycleNumber: Math.floor(offset / 7) + 1,
   };
-}
-
-export function resolvePlanDayForInstant(
-  instant: Date | string | number,
-  timeZone: string,
-  planStartDate: string,
-  planEndDate?: string,
-): ResolvedPlanDay | null {
-  return resolvePlanDay(
-    localDateInTimeZone(instant, timeZone),
-    planStartDate,
-    planEndDate,
-  );
 }

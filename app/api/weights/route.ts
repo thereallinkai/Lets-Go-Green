@@ -87,7 +87,15 @@ export async function POST(request: Request) {
     return apiError("WEIGHT_OUT_OF_RANGE", "Enter a weight between 20 and 500 kilograms equivalent.", 422);
   }
   if (isDevelopmentDemo()) {
-    return apiSuccess({ localDate: parsed.data.localDate, weightKg, sourceDisplayUnit: parsed.data.unit }, 201);
+    return apiSuccess(
+      {
+        id: crypto.randomUUID(),
+        localDate: parsed.data.localDate,
+        weightKg,
+        sourceDisplayUnit: parsed.data.unit,
+      },
+      201,
+    );
   }
 
   try {

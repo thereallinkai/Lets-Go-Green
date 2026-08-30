@@ -39,7 +39,6 @@ describe("application release metadata", () => {
     expect(files["src/lib/env.ts"]).toContain(
       '"LetsGoGreen/1.0.0-beta.6',
     );
-    expect(packageManifest.overrides["fast-uri"]).toBe("4.1.2");
   });
 
   it("presents the current prerelease as Beta 6", () => {

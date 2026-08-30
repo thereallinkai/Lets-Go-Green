@@ -84,7 +84,7 @@ export function parseWeightKg(
   };
 }
 
-export function normalizeFoodSlug(slug: string) {
+function normalizeFoodSlug(slug: string) {
   return LEGACY_FOOD_SLUGS[slug] ?? slug;
 }
 

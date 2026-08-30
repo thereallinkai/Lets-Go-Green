@@ -77,7 +77,9 @@ export async function DELETE(
       return baselineProtectedError();
     }
     if (error) return apiError("WEIGHT_DELETE_FAILED", "The weight entry could not be deleted.", 500);
-    if (!data) return apiError("WEIGHT_NOT_FOUND", "That weight entry was not found.", 404);
+    if (!data) {
+      return apiSuccess({ deleted: true, alreadyAbsent: true });
+    }
     return apiSuccess({ deleted: true });
   } catch {
     return apiError("SERVICE_UNAVAILABLE", "Weight services are temporarily unavailable.", 503);

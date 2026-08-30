@@ -27,6 +27,25 @@ function profileRequest() {
   });
 }
 
+function goalRequest(goalType: string) {
+  return new Request("http://localhost/api/settings", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ section: "goal", goalType }),
+  });
+}
+
+function resolvedQuery(result: { data: unknown; error: unknown }) {
+  const query = {
+    eq: vi.fn(),
+    select: vi.fn(),
+    maybeSingle: vi.fn().mockResolvedValue(result),
+  };
+  query.eq.mockReturnValue(query);
+  query.select.mockReturnValue(query);
+  return query;
+}
+
 describe("settings route profile persistence", () => {
   beforeEach(() => {
     routeState.client = null;
@@ -124,5 +143,85 @@ describe("settings route profile persistence", () => {
       retryable: true,
     });
     expect(from).not.toHaveBeenCalled();
+  });
+
+  it("rejects a goal-type change that conflicts with the saved target", async () => {
+    const goalRead = resolvedQuery({
+      data: { id: "goal-1", target_weight_kg: 70 },
+      error: null,
+    });
+    const baselineRead = resolvedQuery({
+      data: { weight_kg: 80 },
+      error: null,
+    });
+    const goalUpdate = resolvedQuery({ data: null, error: null });
+    const update = vi.fn(() => goalUpdate);
+    routeState.client = {
+      auth: {
+        getUser: vi.fn().mockResolvedValue({
+          data: { user: { id: "user-1", user_metadata: {} } },
+          error: null,
+        }),
+      },
+      from: vi.fn((table: string) =>
+        table === "goals"
+          ? { select: goalRead.select, update }
+          : { select: baselineRead.select },
+      ),
+    };
+
+    const response = await PATCH(goalRequest("muscle_gain"));
+    const result = await response.json();
+
+    expect(response.status).toBe(422);
+    expect(result.error).toMatchObject({
+      code: "GOAL_DIRECTION_CONFLICT",
+      retryable: false,
+      action: { href: "/onboarding?step=4" },
+    });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("updates a goal type after validating its saved weight direction", async () => {
+    const goalRead = resolvedQuery({
+      data: { id: "goal-1", target_weight_kg: 70 },
+      error: null,
+    });
+    const baselineRead = resolvedQuery({
+      data: { weight_kg: 80 },
+      error: null,
+    });
+    const goalUpdate = resolvedQuery({
+      data: {
+        id: "goal-1",
+        goal_type: "fat_loss",
+        status: "active",
+        target_weight_kg: 70,
+        target_date: "2026-12-31",
+      },
+      error: null,
+    });
+    const update = vi.fn(() => goalUpdate);
+    routeState.client = {
+      auth: {
+        getUser: vi.fn().mockResolvedValue({
+          data: { user: { id: "user-1", user_metadata: {} } },
+          error: null,
+        }),
+      },
+      from: vi.fn((table: string) =>
+        table === "goals"
+          ? { select: goalRead.select, update }
+          : { select: baselineRead.select },
+      ),
+    };
+
+    const response = await PATCH(goalRequest("fat_loss"));
+
+    expect(response.status).toBe(200);
+    expect(update).toHaveBeenCalledWith({ goal_type: "fat_loss" });
+    expect(goalUpdate.eq).toHaveBeenCalledWith("id", "goal-1");
+    expect(goalUpdate.eq).toHaveBeenCalledWith("user_id", "user-1");
+    expect(goalUpdate.eq).toHaveBeenCalledWith("status", "active");
   });
 });

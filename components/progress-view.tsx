@@ -1,16 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Edit3, Scale, Trash2, TrendingDown } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { ApiErrorNotice } from "@/components/api-error-notice";
 import { LazyWeightTrendChart } from "@/components/lazy-weight-trend-chart";
-import {
-  addLocalDays,
-  buildSevenDayRollingAverageSeries,
-  convertWeight,
-  localDateInTimeZone,
-} from "@/src/lib/domain";
+import { addLocalDays, localDateInTimeZone } from "@/src/lib/domain/dates";
+import { buildSevenDayRollingAverageSeries } from "@/src/lib/domain/trends";
+import { convertWeight } from "@/src/lib/domain/units";
 import type { ApiError } from "@/src/lib/api-response";
 import {
   apiErrorFromResponse,
@@ -24,6 +21,9 @@ const RANGE_OPTIONS = [
   { key: "all", label: "All", days: null },
 ] as const;
 type RangeKey = (typeof RANGE_OPTIONS)[number]["key"];
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type ProgressEntry = {
   id: string;
@@ -56,6 +56,10 @@ function displayWeight(kg: number, unit: "kg" | "lb") {
   return `${amount.toFixed(1)} ${unit}`;
 }
 
+function isPersistedWeightId(value: unknown): value is string {
+  return typeof value === "string" && UUID_PATTERN.test(value);
+}
+
 export function ProgressView({
   initialEntries,
   baselineKg,
@@ -83,6 +87,9 @@ export function ProgressView({
   const [range, setRange] = useState<RangeKey>("4-weeks");
   const [message, setMessage] = useState("");
   const [operationError, setOperationError] = useState<ApiError | null>(null);
+  const [mutationPending, setMutationPending] = useState(false);
+  const mutationSequenceRef = useRef(0);
+  const activeMutationRef = useRef<number | null>(null);
   const todayIso = localDateInTimeZone(new Date(), timeZone);
   const selectedRange =
     RANGE_OPTIONS.find((option) => option.key === range) ?? RANGE_OPTIONS[0];
@@ -121,8 +128,28 @@ export function ProgressView({
     (entry) => entry.isBaseline && entry.isoDate === todayIso,
   );
 
+  function beginMutation() {
+    if (activeMutationRef.current !== null) return null;
+    const token = mutationSequenceRef.current + 1;
+    mutationSequenceRef.current = token;
+    activeMutationRef.current = token;
+    setMutationPending(true);
+    return token;
+  }
+
+  function mutationIsCurrent(token: number) {
+    return activeMutationRef.current === token;
+  }
+
+  function finishMutation(token: number) {
+    if (!mutationIsCurrent(token)) return;
+    activeMutationRef.current = null;
+    setMutationPending(false);
+  }
+
   async function save(event: React.FormEvent) {
     event.preventDefault();
+    if (activeMutationRef.current !== null) return;
     const parsed = Number(value);
     if (
       !Number.isFinite(parsed) ||
@@ -140,7 +167,8 @@ export function ProgressView({
       { retryable: true, action: { kind: "retry", label: "Try saving again" } },
     );
     setOperationError(null);
-    const existing = entries.find((entry) => entry.id === editingId);
+    const targetEditingId = editingId;
+    const existing = entries.find((entry) => entry.id === targetEditingId);
     const next: ProgressEntry = existing
       ? { ...existing, kg: Number(kg.toFixed(3)) }
       : {
@@ -150,20 +178,26 @@ export function ProgressView({
           kg: Number(kg.toFixed(3)),
         };
     const previous = entries;
+    const mutationToken = beginMutation();
+    if (mutationToken === null) return;
     setEntries(
       [next, ...entries.filter((entry) =>
-        editingId ? entry.id !== editingId : entry.isoDate !== todayIso,
+        targetEditingId
+          ? entry.id !== targetEditingId
+          : entry.isoDate !== todayIso,
       )].toSorted((a, b) => b.isoDate.localeCompare(a.isoDate)),
     );
     setMessage("Saving…");
     try {
       const response = await fetch(
-        editingId ? `/api/weights/${editingId}` : "/api/weights",
+        targetEditingId
+          ? `/api/weights/${targetEditingId}`
+          : "/api/weights",
         {
-          method: editingId ? "PUT" : "POST",
+          method: targetEditingId ? "PUT" : "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(
-            editingId
+            targetEditingId
               ? { weight: parsed, unit }
               : { localDate: todayIso, weight: parsed, unit },
           ),
@@ -172,12 +206,29 @@ export function ProgressView({
       if (!response.ok) {
         throw await apiErrorFromResponse(response, fallback);
       }
+      if (!mutationIsCurrent(mutationToken)) return;
       const result =
         typeof response.json === "function"
           ? await response.json().catch(() => null)
           : null;
+      if (!mutationIsCurrent(mutationToken)) return;
       const savedId = result?.data?.id;
-      if (!editingId && typeof savedId === "string") {
+      if (!targetEditingId && !isPersistedWeightId(savedId)) {
+        throw clientApiError(
+          "WEIGHT_SAVE_RESPONSE_INVALID",
+          "The saved weight could not be confirmed.",
+          "The server may have saved this reading, but it did not return a valid identifier. Refresh Progress before trying again.",
+          {
+            retryable: true,
+            action: {
+              kind: "navigate",
+              label: "Refresh Progress",
+              href: "/progress",
+            },
+          },
+        );
+      }
+      if (!targetEditingId) {
         setEntries((current) =>
           current.map((entry) =>
             entry.id === next.id ? { ...entry, id: savedId } : entry,
@@ -188,16 +239,22 @@ export function ProgressView({
       setValue("");
       setEditingId(null);
     } catch (error) {
+      if (!mutationIsCurrent(mutationToken)) return;
       const publicError = apiErrorFromThrown(error, fallback);
       setEntries(previous);
       setOperationError(publicError);
       setMessage(
-        "The entry could not be saved. Your previous history was restored.",
+        publicError.code === "WEIGHT_SAVE_RESPONSE_INVALID"
+          ? "The saved entry could not be confirmed. Refresh Progress before trying again."
+          : "The entry could not be saved. Your previous history was restored.",
       );
+    } finally {
+      finishMutation(mutationToken);
     }
   }
 
   async function remove(entry: ProgressEntry) {
+    if (activeMutationRef.current !== null) return;
     if (entry.isBaseline) {
       setMessage(
         "The onboarding starting weight is protected. Remove or edit a later reading instead.",
@@ -211,6 +268,8 @@ export function ProgressView({
       "Your previous history was restored. Check the connection and try again.",
       { retryable: true, action: { kind: "retry", label: "Try removing again" } },
     );
+    const mutationToken = beginMutation();
+    if (mutationToken === null) return;
     setOperationError(null);
     setEntries((current) => current.filter((item) => item.id !== entry.id));
     setMessage(`Removing ${entry.date}…`);
@@ -221,22 +280,27 @@ export function ProgressView({
       if (!response.ok) {
         throw await apiErrorFromResponse(response, fallback);
       }
+      if (!mutationIsCurrent(mutationToken)) return;
       setMessage(`Removed the ${entry.date} entry.`);
       if (editingId === entry.id) {
         setEditingId(null);
         setValue("");
       }
     } catch (error) {
+      if (!mutationIsCurrent(mutationToken)) return;
       const publicError = apiErrorFromThrown(error, fallback);
       setEntries(previous);
       setOperationError(publicError);
       setMessage(
         "The entry could not be removed. Your previous history was restored.",
       );
+    } finally {
+      finishMutation(mutationToken);
     }
   }
 
   function edit(entry: ProgressEntry) {
+    if (activeMutationRef.current !== null) return;
     if (entry.isBaseline) {
       setMessage(
         "The onboarding starting weight is protected. Add or edit a later reading instead.",
@@ -387,6 +451,7 @@ export function ProgressView({
                 <label className="field">
                   <span className="field-label">Weight</span>
                   <input
+                    disabled={mutationPending}
                     inputMode="decimal"
                     value={value}
                     onChange={(event) => onValueChange(event.target.value)}
@@ -396,7 +461,7 @@ export function ProgressView({
                 </label>
                 <label className="field">
                   <span className="field-label">Unit</span>
-                  <select value={unit} onChange={(event) => changeUnit(event.target.value as "kg" | "lb")}>
+                  <select disabled={mutationPending} value={unit} onChange={(event) => changeUnit(event.target.value as "kg" | "lb")}>
                     <option value="kg">kg</option>
                     <option value="lb">lb</option>
                   </select>
@@ -416,13 +481,16 @@ export function ProgressView({
               {message ? <p className={message.includes("could not") || message.startsWith("Enter") ? "field-error" : "field-help"} role="status">{message}</p> : null}
               <button
                 className="button button-dark form-submit"
-                disabled={todayIsProtectedBaseline && !editingId}
+                disabled={
+                  mutationPending ||
+                  (todayIsProtectedBaseline && !editingId)
+                }
                 type="submit"
               >
                 {editingId ? "Save changes" : "Save entry"}
               </button>
               {editingId ? (
-                <button className="button button-quiet form-submit" type="button" onClick={() => { setEditingId(null); setValue(""); setMessage("Edit cancelled."); }}>
+                <button className="button button-quiet form-submit" disabled={mutationPending} type="button" onClick={() => { setEditingId(null); setValue(""); setMessage("Edit cancelled."); }}>
                   Cancel edit
                 </button>
               ) : null}
@@ -442,8 +510,8 @@ export function ProgressView({
                     </span>
                   ) : (
                     <span>
-                      <button className="icon-button" aria-label={`Edit weight for ${entry.date}`} type="button" onClick={() => edit(entry)}><Edit3 size={15} /></button>
-                      <button className="icon-button" aria-haspopup="dialog" aria-label={`Delete weight for ${entry.date}`} type="button" onClick={() => setDeleteCandidate(entry)}><Trash2 size={15} /></button>
+                      <button className="icon-button" aria-label={`Edit weight for ${entry.date}`} disabled={mutationPending} type="button" onClick={() => edit(entry)}><Edit3 size={15} /></button>
+                      <button className="icon-button" aria-haspopup="dialog" aria-label={`Delete weight for ${entry.date}`} disabled={mutationPending} type="button" onClick={() => setDeleteCandidate(entry)}><Trash2 size={15} /></button>
                     </span>
                   )}
                 </div>
@@ -473,12 +541,13 @@ export function ProgressView({
               style={{ justifyContent: "flex-end", marginTop: "1rem" }}
             >
               <Dialog.Close asChild>
-                <button className="button button-quiet" type="button">
+                <button className="button button-quiet" disabled={mutationPending} type="button">
                   Keep entry
                 </button>
               </Dialog.Close>
               <button
                 className="button button-dark"
+                disabled={mutationPending}
                 type="button"
                 onClick={() => {
                   if (!deleteCandidate) return;

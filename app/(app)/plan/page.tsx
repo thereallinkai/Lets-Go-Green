@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { format, parseISO } from "date-fns";
 import {
   PlanLoadError,
   PlanView,
@@ -9,6 +8,8 @@ import {
 import {
   aggregateNutrition,
   aiPlanSchema,
+  formatLocalDate,
+  localDateInTimeZone,
   type MeasurementBasis,
   type NutritionItem,
   type NutritionRecord,
@@ -16,16 +17,18 @@ import {
   type NutritionVerificationStatus,
 } from "@/src/lib/domain";
 import { isDevelopmentDemo } from "@/src/lib/env";
-import { readPlanSnapshotWeight } from "@/src/lib/plan-snapshot";
+import {
+  readPlanSnapshotRange,
+  readPlanSnapshotWeight,
+} from "@/src/lib/plan-snapshot";
 import {
   createSupabaseServerClient,
   getCurrentUser,
 } from "@/src/lib/supabase/server";
-import type { Json, Tables } from "@/src/types/database";
+import type { Tables } from "@/src/types/database";
 
 export const metadata: Metadata = { title: "My Plan" };
 
-type PlanRow = Tables<"plans">;
 type PlanItemRow = Tables<"plan_items">;
 type NutritionRow = Pick<
   Tables<"food_nutrition">,
@@ -52,35 +55,13 @@ function titleCase(value: string) {
 
 function displayDate(value: string) {
   try {
-    return format(parseISO(value), "MMM d, yyyy");
+    return formatLocalDate(
+      localDateInTimeZone(value, "UTC"),
+      "month-day-year",
+    );
   } catch {
     return "Date unavailable";
   }
-}
-
-function isJsonObject(value: Json): value is { [key: string]: Json | undefined } {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function readRange(
-  snapshot: Json,
-  key: "energyKcal" | "proteinGrams",
-): { minimum: number; maximum: number } | null {
-  if (!isJsonObject(snapshot)) return null;
-  const ranges = snapshot.deterministicRanges;
-  if (!ranges || !isJsonObject(ranges)) return null;
-  const candidate = ranges[key];
-  if (!candidate || !isJsonObject(candidate)) return null;
-  const minimum = candidate.minimum;
-  const maximum = candidate.maximum;
-  return typeof minimum === "number" &&
-    Number.isFinite(minimum) &&
-    minimum >= 0 &&
-    typeof maximum === "number" &&
-    Number.isFinite(maximum) &&
-    maximum >= minimum
-    ? { minimum, maximum }
-    : null;
 }
 
 function approvedStatus(status: NutritionVerificationStatus) {
@@ -218,9 +199,7 @@ export default async function PlanPage({
 
   const { data: plans, error: plansError } = await supabase
     .from("plans")
-    .select(
-      "id,accepted_at,created_at,goal_id,input_snapshot,model,prompt_version,provider,status,updated_at,user_id,validated_output_snapshot,version",
-    )
+    .select("id,accepted_at,created_at,goal_id,status,version")
     .eq("user_id", user.id)
     .order("version", { ascending: false })
     .limit(50);
@@ -249,60 +228,95 @@ export default async function PlanPage({
               plan.status === "accepted" ||
               plan.status === "superseded"),
         );
-  const selectedPlan =
+  const selectedPlanSummary =
     requestedView === "accepted" && acceptedPlan
       ? acceptedPlan
       : requestedPlan ?? activePlans[0];
-  if (!selectedPlan) return emptyPlan();
+  if (!selectedPlanSummary) return emptyPlan();
 
-  const [daysResult, goalResult, weightsResult] = await Promise.all([
-    supabase
-      .from("plan_days")
-      .select("id,plan_id,day_index,title")
-      .eq("plan_id", selectedPlan.id)
-      .order("day_index"),
-    supabase
-      .from("goals")
-      .select("id,target_weight_kg")
-      .eq("id", selectedPlan.goal_id)
-      .eq("user_id", user.id)
-      .maybeSingle(),
-    supabase
-      .from("weight_entries")
-      .select("weight_kg")
-      .eq("user_id", user.id)
-      .eq("is_onboarding_baseline", true)
-      .maybeSingle(),
-  ]);
-  if (daysResult.error || goalResult.error || weightsResult.error) {
+  const [selectedPlanResult, daysResult, goalResult, weightsResult] =
+    await Promise.all([
+      supabase
+        .from("plans")
+        .select(
+          "id,accepted_at,created_at,goal_id,input_snapshot,model,provider,status,validated_output_snapshot,version",
+        )
+        .eq("id", selectedPlanSummary.id)
+        .eq("user_id", user.id)
+        .maybeSingle(),
+      supabase
+        .from("plan_days")
+        .select(`
+        id,
+        plan_id,
+        day_index,
+        title,
+        plan_meals (
+          id,
+          meal_type,
+          plan_day_id,
+          sort_order,
+          plan_items (
+            id,
+            food_id,
+            measurement_basis,
+            plan_meal_id,
+            preparation_note,
+            quantity,
+            sort_order,
+            substitution_group,
+            unit,
+            verification_status,
+            food:foods (id, english_name),
+            nutrition:food_nutrition (
+              calories,
+              carbohydrate_g,
+              fat_g,
+              fiber_g,
+              food_id,
+              measurement_basis,
+              protein_g,
+              reference_quantity,
+              reference_unit,
+              sodium_mg,
+              source_name,
+              source_reference,
+              verification_status
+            )
+          )
+        )
+        `)
+        .eq("plan_id", selectedPlanSummary.id)
+        .order("day_index"),
+      supabase
+        .from("goals")
+        .select("id,target_weight_kg")
+        .eq("id", selectedPlanSummary.goal_id)
+        .eq("user_id", user.id)
+        .maybeSingle(),
+      supabase
+        .from("weight_entries")
+        .select("weight_kg")
+        .eq("user_id", user.id)
+        .eq("is_onboarding_baseline", true)
+        .maybeSingle(),
+    ]);
+  if (
+    selectedPlanResult.error ||
+    !selectedPlanResult.data ||
+    daysResult.error ||
+    goalResult.error ||
+    weightsResult.error
+  ) {
     return <PlanLoadError />;
   }
 
+  const selectedPlan = selectedPlanResult.data;
   const planDays = daysResult.data ?? [];
   if (planDays.length !== 7) return <PlanLoadError />;
-  const dayIds = planDays.map((day) => day.id);
-  const mealsResult = dayIds.length
-    ? await supabase
-        .from("plan_meals")
-        .select("id,meal_type,plan_day_id,sort_order")
-        .in("plan_day_id", dayIds)
-        .order("sort_order")
-    : null;
-  if (mealsResult?.error) return <PlanLoadError />;
-  const meals = mealsResult?.data ?? [];
+  const meals = planDays.flatMap((day) => day.plan_meals);
   if (meals.length !== 21) return <PlanLoadError />;
-  const mealIds = meals.map((meal) => meal.id);
-  const itemsResult = mealIds.length
-    ? await supabase
-        .from("plan_items")
-        .select(
-          "id,food_id,measurement_basis,plan_meal_id,preparation_note,quantity,sort_order,substitution_group,unit,verification_status",
-        )
-        .in("plan_meal_id", mealIds)
-        .order("sort_order")
-    : null;
-  if (itemsResult?.error) return <PlanLoadError />;
-  const items = itemsResult?.data ?? [];
+  const items = meals.flatMap((meal) => meal.plan_items);
   if (
     meals.some(
       (meal) => !items.some((item) => item.plan_meal_id === meal.id),
@@ -311,39 +325,28 @@ export default async function PlanPage({
     return <PlanLoadError />;
   }
   const foodIds = [...new Set(items.map((item) => item.food_id))];
-  const [foodsResult, nutritionResult] = await Promise.all([
-    foodIds.length
-      ? supabase
-          .from("foods")
-          .select("id,english_name")
-          .in("id", foodIds)
-      : Promise.resolve(null),
-    foodIds.length
-      ? supabase
-          .from("food_nutrition")
-          .select(
-            "calories,carbohydrate_g,fat_g,fiber_g,food_id,id,measurement_basis,protein_g,reference_quantity,reference_unit,serving_weight_grams,sodium_mg,source_name,source_reference,source_version,verification_status,verified_at,created_at,updated_at",
-          )
-          .in("food_id", foodIds)
-      : Promise.resolve(null),
-  ]);
-  if (foodsResult?.error || nutritionResult?.error) {
-    return <PlanLoadError />;
-  }
-
   const foodsById = new Map(
-    (foodsResult?.data ?? []).map((food) => [food.id, food.english_name]),
+    items.flatMap((item) =>
+      item.food ? [[item.food.id, item.food.english_name] as const] : [],
+    ),
   );
   const nutritionByKey = new Map(
-    (nutritionResult?.data ?? []).map((record) => [
-      `${record.food_id}:${record.measurement_basis}`,
-      record,
-    ]),
+    items.flatMap((item) =>
+      item.nutrition
+        ? [
+            [
+              `${item.nutrition.food_id}:${item.nutrition.measurement_basis}`,
+              item.nutrition,
+            ] as const,
+          ]
+        : [],
+    ),
   );
   if (
     foodsById.size !== foodIds.length ||
     items.some(
       (item) =>
+        !item.food ||
         !nutritionByKey.has(`${item.food_id}:${item.measurement_basis}`),
     )
   ) {
@@ -389,7 +392,7 @@ export default async function PlanPage({
     readPlanSnapshotWeight(selectedPlan.input_snapshot, "targetWeightKg") ??
     goalResult.data?.target_weight_kg ??
     null;
-  const history: PlanHistoryDisplay[] = availablePlans.map((plan: PlanRow) => ({
+  const history: PlanHistoryDisplay[] = availablePlans.map((plan) => ({
     id: plan.id,
     version: plan.version,
     status: titleCase(plan.status),
@@ -415,7 +418,10 @@ export default async function PlanPage({
           : ["The stored plan assessment could not be validated for display."]
       }
       days={displayDays}
-      energyRange={readRange(selectedPlan.input_snapshot, "energyKcal")}
+      energyRange={readPlanSnapshotRange(
+        selectedPlan.input_snapshot,
+        "energyKcal",
+      )}
       goalAssessment={
         parsedPlan.success
           ? parsedPlan.data.goalAssessment
@@ -436,7 +442,7 @@ export default async function PlanPage({
             : "historical"
       }
       majorReasons={parsedPlan.success ? parsedPlan.data.majorReasons : []}
-      proteinRange={readRange(
+      proteinRange={readPlanSnapshotRange(
         selectedPlan.input_snapshot,
         "proteinGrams",
       )}

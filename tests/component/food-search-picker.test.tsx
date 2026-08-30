@@ -2,6 +2,11 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/components/food-label-upload", () => ({
+  FoodLabelUpload: () => <div>Private label tools loaded</div>,
+}));
+
 import {
   FoodSearchPicker,
   type FoodPickerItem,
@@ -101,6 +106,27 @@ afterEach(() => {
 });
 
 describe("FoodSearchPicker smart discovery", () => {
+  it("loads private label tools only after the fallback is opened", async () => {
+    const user = userEvent.setup();
+    render(
+      <FoodSearchPicker
+        foods={[]}
+        search="missing product"
+        onSearchChange={vi.fn()}
+        onAdd={vi.fn()}
+        onCatalogChanged={vi.fn(async () => true)}
+      />,
+    );
+
+    expect(screen.queryByText("Private label tools loaded")).not.toBeInTheDocument();
+    await user.click(
+      screen.getByText("Product not found? Add package-label photos"),
+    );
+    expect(
+      await screen.findByText("Private label tools loaded"),
+    ).toBeInTheDocument();
+  });
+
   it("can hide the duplicate private-label workflow with truthful Settings guidance", () => {
     render(
       <FoodSearchPicker

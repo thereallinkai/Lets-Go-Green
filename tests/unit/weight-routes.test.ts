@@ -89,6 +89,26 @@ describe("protected onboarding baseline weight routes", () => {
     });
   });
 
+  it("treats an already-absent entry as a successful delete retry", async () => {
+    const rpc = clientWithRpc({ data: null, error: null });
+
+    const response = await deleteWeight(
+      new Request(`http://localhost/api/weights/${entryId}`, {
+        method: "DELETE",
+      }),
+      { params: Promise.resolve({ id: entryId }) },
+    );
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).data).toEqual({
+      deleted: true,
+      alreadyAbsent: true,
+    });
+    expect(rpc).toHaveBeenCalledWith("delete_weight_entry", {
+      target_entry_id: entryId,
+    });
+  });
+
   it("still updates an ordinary owned weight through the guarded RPC", async () => {
     const saved = {
       id: entryId,

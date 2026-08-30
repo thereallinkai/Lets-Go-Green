@@ -1,4 +1,5 @@
 const LOCAL_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+const LOCAL_MONTH_PATTERN = /^(\d{4})-(\d{2})$/;
 const DAY_IN_MILLISECONDS = 86_400_000;
 
 export interface LocalDateParts {
@@ -6,6 +7,32 @@ export interface LocalDateParts {
   month: number;
   day: number;
 }
+
+export type LocalDateFormatStyle =
+  | "weekday-short"
+  | "month-day"
+  | "month-day-year";
+
+const LOCAL_DATE_FORMATTERS: Record<
+  LocalDateFormatStyle,
+  Intl.DateTimeFormat
+> = {
+  "weekday-short": new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    timeZone: "UTC",
+  }),
+  "month-day": new Intl.DateTimeFormat("en-US", {
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+  }),
+  "month-day-year": new Intl.DateTimeFormat("en-US", {
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+    year: "numeric",
+  }),
+};
 
 export function parseLocalDate(localDate: string): LocalDateParts {
   const match = LOCAL_DATE_PATTERN.exec(localDate);
@@ -27,12 +54,22 @@ export function parseLocalDate(localDate: string): LocalDateParts {
   return { year, month, day };
 }
 
-export function localDateToEpochDay(localDate: string): number {
+export function formatLocalDate(
+  localDate: string,
+  style: LocalDateFormatStyle,
+): string {
+  const { year, month, day } = parseLocalDate(localDate);
+  return LOCAL_DATE_FORMATTERS[style].format(
+    new Date(Date.UTC(year, month - 1, day)),
+  );
+}
+
+function localDateToEpochDay(localDate: string): number {
   const { year, month, day } = parseLocalDate(localDate);
   return Math.floor(Date.UTC(year, month - 1, day) / DAY_IN_MILLISECONDS);
 }
 
-export function epochDayToLocalDate(epochDay: number): string {
+function epochDayToLocalDate(epochDay: number): string {
   if (!Number.isInteger(epochDay)) {
     throw new RangeError("Epoch day must be an integer.");
   }
@@ -47,6 +84,28 @@ export function epochDayToLocalDate(epochDay: number): string {
 export function addLocalDays(localDate: string, days: number): string {
   if (!Number.isInteger(days)) throw new RangeError("Days must be an integer.");
   return epochDayToLocalDate(localDateToEpochDay(localDate) + days);
+}
+
+export function addLocalMonths(localMonth: string, months: number): string {
+  const match = LOCAL_MONTH_PATTERN.exec(localMonth);
+  const year = Number(match?.[1]);
+  const month = Number(match?.[2]);
+  if (!match || month < 1 || month > 12) {
+    throw new RangeError("Local month must use a valid YYYY-MM format.");
+  }
+  if (!Number.isInteger(months)) {
+    throw new RangeError("Months must be an integer.");
+  }
+  const monthIndex = year * 12 + month - 1 + months;
+  const shiftedYear = Math.floor(monthIndex / 12);
+  const shiftedMonth = ((monthIndex % 12) + 12) % 12 + 1;
+  return `${String(shiftedYear).padStart(4, "0")}-${String(shiftedMonth).padStart(2, "0")}`;
+}
+
+export function localMonthBounds(localMonth: string) {
+  const first = `${addLocalMonths(localMonth, 0)}-01`;
+  const nextMonth = `${addLocalMonths(localMonth, 1)}-01`;
+  return { first, last: addLocalDays(nextMonth, -1) };
 }
 
 export function daysBetweenLocalDates(fromDate: string, toDate: string): number {

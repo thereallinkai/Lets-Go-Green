@@ -44,6 +44,12 @@ const SESSION_MISSING_CODES = new Set([
   "bad_jwt",
 ]);
 
+const IDENTITY_CONCEALING_CODES = new Set([
+  "user_not_found",
+  "invalid_credentials",
+  "email_address_invalid",
+]);
+
 function value(error: unknown, key: keyof AuthErrorLike) {
   if (!error || typeof error !== "object") return undefined;
   return (error as AuthErrorLike)[key];
@@ -62,6 +68,10 @@ function errorStatus(error: unknown) {
 export function isAuthSessionMissing(error: unknown) {
   return value(error, "name") === "AuthSessionMissingError"
     || SESSION_MISSING_CODES.has(errorCode(error));
+}
+
+export function isIdentityConcealingAuthError(error: unknown) {
+  return IDENTITY_CONCEALING_CODES.has(errorCode(error));
 }
 
 function weakPasswordReasons(error: unknown) {

@@ -179,12 +179,6 @@
   margin-top: 0.85rem;
 }
 
-.noticeError {
-  border-color: rgba(151, 61, 47, 0.24);
-  background: #fff4f0;
-  color: #7b342b;
-}
-
 .resultsSection {
   overflow: hidden;
 }
@@ -889,11 +883,6 @@
   line-height: 1.45;
 }
 
-.formStatusError {
-  background: #fff4f0;
-  color: #7b342b;
-}
-
 .labelApiError {
   margin-top: 0.85rem;
 }
@@ -1024,13 +1013,6 @@
   border-color: #547959;
   background: #1a3421;
   color: #d9ecd9;
-}
-
-:global(html[data-theme="dark"]) .noticeError,
-:global(html[data-theme="dark"]) .formStatusError {
-  border-color: #92544f;
-  background: #351d1d;
-  color: #ffc8c2;
 }
 
 :global(html[data-theme="dark"]) .resultsHeading,

@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("server-only", () => ({}));
+
 const routeState = vi.hoisted(() => ({
+  demoMode: false,
+  from: vi.fn(),
   authResult: {
     data: { user: null as { id: string } | null },
     error: null as { name?: string; status?: number } | null,
@@ -8,18 +12,6 @@ const routeState = vi.hoisted(() => ({
   profileResult: {
     data: { time_zone: "America/New_York" } as {
       time_zone: string;
-    } | null,
-    error: null as { code?: string } | null,
-  },
-  foodResult: {
-    data: {
-      id: "10000000-0000-4000-8000-000000000001",
-      english_name: "Apple",
-      verification_status: "verified",
-    } as {
-      id: string;
-      english_name: string;
-      verification_status: string;
     } | null,
     error: null as { code?: string } | null,
   },
@@ -41,16 +33,13 @@ function singleQueryBuilder(result: {
 }
 
 vi.mock("@/src/lib/env", () => ({
-  isDevelopmentDemo: () => false,
+  isDevelopmentDemo: () => routeState.demoMode,
 }));
 
 vi.mock("@/src/lib/supabase/server", () => ({
   createSupabaseServerClient: async () => ({
     auth: { getUser: async () => routeState.authResult },
-    from: (table: string) =>
-      singleQueryBuilder(
-        table === "foods" ? routeState.foodResult : routeState.profileResult,
-      ),
+    from: routeState.from,
     rpc: routeState.rpc,
   }),
 }));
@@ -65,16 +54,15 @@ const routeParams = {
 
 describe("check-in session and profile failures", () => {
   beforeEach(() => {
+    routeState.demoMode = false;
+    routeState.from.mockReset();
+    routeState.from.mockImplementation(() =>
+      singleQueryBuilder(routeState.profileResult),
+    );
     routeState.authResult.data.user = null;
     routeState.authResult.error = null;
     routeState.profileResult.data = { time_zone: "America/New_York" };
     routeState.profileResult.error = null;
-    routeState.foodResult.data = {
-      id: "10000000-0000-4000-8000-000000000001",
-      english_name: "Apple",
-      verification_status: "verified",
-    };
-    routeState.foodResult.error = null;
     routeState.rpc.mockReset();
   });
 
@@ -176,14 +164,12 @@ describe("check-in session and profile failures", () => {
     expect(routeState.rpc).not.toHaveBeenCalled();
   });
 
-  it("returns a reconciliation marker instead of inventing a food name after a committed add", async () => {
+  it("returns only the committed item id without a food enrichment query", async () => {
     routeState.authResult.data.user = { id: "user-1" };
     routeState.rpc.mockResolvedValue({
       data: { id: "20000000-0000-4000-8000-000000000002" },
       error: null,
     });
-    routeState.foodResult.data = null;
-    routeState.foodResult.error = { code: "08006" };
 
     const response = await POST_ITEM(
       new Request("http://localhost/api/checkins/2026-08-12/items", {
@@ -201,13 +187,35 @@ describe("check-in session and profile failures", () => {
     expect(response.status).toBe(201);
     expect(body.data).toEqual({
       id: "20000000-0000-4000-8000-000000000002",
+    });
+    expect(routeState.from).toHaveBeenCalledOnce();
+    expect(routeState.from).toHaveBeenCalledWith("profiles");
+  });
+
+  it("preserves the local demo food-add response without account queries", async () => {
+    routeState.demoMode = true;
+
+    const response = await POST_ITEM(
+      new Request("http://localhost/api/checkins/2026-08-12/items", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          mealType: "breakfast",
+          foodId: "demo-food",
+        }),
+      }),
+      routeParams,
+    );
+
+    expect(response.status).toBe(201);
+    expect((await response.json()).data).toEqual({
+      id: "demo-breakfast-demo-food",
       localDate: "2026-08-12",
       mealType: "breakfast",
-      foodId: "10000000-0000-4000-8000-000000000001",
-      food: null,
-      reconciliationRequired: true,
+      foodId: "demo-food",
     });
-    expect(JSON.stringify(body)).not.toContain("Selected food");
+    expect(routeState.from).not.toHaveBeenCalled();
+    expect(routeState.rpc).not.toHaveBeenCalled();
   });
 
   it("maps the recorded-food skip invariant to a stable conflict", async () => {
